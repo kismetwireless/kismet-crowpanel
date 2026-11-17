@@ -18,8 +18,8 @@ KISMET_PASSWORD=
 #                      0.0.0.0 for the network, 127.0.0.1 for this machine only
 #   --port N           HTTP port (default 8235)
 #   --web              also serve the browser viewer, with --listen
-#   --web-dir DIR      the built web viewer, with --web
-#                      ("make install-web" puts it in @datadir@/kismet-screen/web)
+#   --web-dir DIR      the built web viewer, with --web (default: the one
+#                      "make install-web" puts in @datadir@/kismet-crowpanel/web)
 #   --name NAME        server name when Kismet doesn't report one
 #   --no-map           don't offer map tiles
 #   --tile-cache-mb N  map tile cache cap (default 500)
