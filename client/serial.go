@@ -35,9 +35,14 @@ var (
 	baudConfirmWait = 3 * time.Second
 	linkQuietWait   = 12 * time.Second
 	probeWait       = 3 * time.Second
+	// frames that fail their CRC: this many in linkBadWindow at a fast
+	// rate means the rate doesn't really work
+	linkBadMax    = 3
+	linkBadWindow = 30 * time.Second
 )
 
-// faster rates the firmware takes, tried from the one asked for on down
+// faster rates the firmware takes, tried from the one asked for on down;
+// --baud auto starts at the top
 var linkRates = []int{2000000, 1500000, 921600, 460800, 230400}
 
 // serialLink pushes the state document to the panel over a serial port,
@@ -82,6 +87,8 @@ type session struct {
 	switchedAt time.Time
 	lastFrame  time.Time
 	hello      string
+	badBase    int // the decoder's bad frame count when badSince began
+	badSince   time.Time
 }
 
 func (s *session) send(t link.Type, payload []byte) error {
@@ -166,8 +173,9 @@ func (s *session) onBaud(p []byte) error {
 	return nil
 }
 
-// checkRate gives up on a rate the panel can't be heard at
-func (s *session) checkRate(now time.Time) error {
+// checkRate gives up on a rate the panel can't be heard at, or can only
+// be heard through errors; bad is the decoder's bad frame count
+func (s *session) checkRate(now time.Time, bad int) error {
 	if s.asked != 0 && now.Sub(s.askedAt) > baudReplyWait {
 		debugf("no answer to the %d baud request", s.asked)
 		s.asked = 0
@@ -175,11 +183,17 @@ func (s *session) checkRate(now time.Time) error {
 	if s.rate == link.LinkBaud {
 		return nil
 	}
+	if now.Sub(s.badSince) > linkBadWindow {
+		s.badBase, s.badSince = bad, now
+	}
 	switch {
 	case s.confirming && now.Sub(s.switchedAt) > baudConfirmWait:
 		log.Printf("WARNING nothing from the panel at %d baud; back to %d", s.rate, link.LinkBaud)
 		s.failed[s.rate] = true
 		s.confirming = false
+	case !s.confirming && bad-s.badBase >= linkBadMax:
+		log.Printf("WARNING %d bad frames from the panel at %d baud; back to %d", bad-s.badBase, s.rate, link.LinkBaud)
+		s.failed[s.rate] = true
 	case !s.confirming && now.Sub(s.lastFrame) > linkQuietWait:
 		log.Printf("WARNING the panel went quiet at %d baud; back to %d", s.rate, link.LinkBaud)
 	default:
@@ -372,7 +386,7 @@ func (l *serialLink) session(f serialPort, setRate func(int) error) error {
 			}
 			timer.Reset(l.interval)
 		case now := <-tick.C:
-			if err := s.checkRate(now); err != nil {
+			if err := s.checkRate(now, dec.Bad); err != nil {
 				return err
 			}
 		case c := <-reads:
@@ -387,6 +401,7 @@ func (l *serialLink) session(f serialPort, setRate func(int) error) error {
 				s.lastFrame = time.Now()
 				if s.confirming {
 					s.confirming = false
+					s.badBase, s.badSince = dec.Bad, time.Now()
 					log.Printf("INFO serial link at %d baud", s.rate)
 				}
 				switch fr.Type {
