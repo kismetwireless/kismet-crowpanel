@@ -380,21 +380,42 @@ func (l *loader) flash(image []byte, addr uint32, baud int, progress func(done, 
 	return l.hardReset()
 }
 
-// findImage looks for <board>.bin in firmware/prebuilt beside the binary
-// (client/), then under the current directory
-func findImage(board string) (string, error) {
+// dataDir is where make install puts the firmware and web viewer, set at
+// build time: -ldflags "-X main.dataDir=$(datadir)/kismet-crowpanel"
+var dataDir = ""
+
+// firmwareDirs lists where to look for prebuilt images: the installed
+// ones first (the configured data dir, then share/ beside bin/), then the
+// source tree's firmware/prebuilt beside client/ and under the current
+// directory
+func firmwareDirs() []string {
 	var dirs []string
+	if dataDir != "" {
+		dirs = append(dirs, filepath.Join(dataDir, "firmware"))
+	}
 	if exe, err := os.Executable(); err == nil {
-		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "..", "firmware", "prebuilt"))
+		bin := filepath.Dir(exe)
+		dirs = append(dirs, filepath.Join(bin, "..", "share", "kismet-crowpanel", "firmware"),
+			filepath.Join(bin, "..", "firmware", "prebuilt"))
 	}
 	dirs = append(dirs, filepath.Join("firmware", "prebuilt"))
+	var out []string
+	for _, d := range dirs {
+		if d = filepath.Clean(d); !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func findImage(board string, dirs []string) (string, error) {
 	for _, d := range dirs {
 		p := filepath.Join(d, board+".bin")
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("no %s.bin in firmware/prebuilt; give its path with --image", board)
+	return "", fmt.Errorf("no %s.bin in %s; give its path with --image", board, strings.Join(dirs, ", "))
 }
 
 func flashMain(args []string) int {
@@ -440,19 +461,36 @@ func flashMain(args []string) int {
 		}
 	}
 
-	f, err := openSerial(*port, romBaud)
-	if err != nil {
-		return fail("%s: %v", *port, err)
-	}
-	defer f.Close()
-	l := newLoader(f)
-	l.setBaud = func(b int) error { return setBaud(f, b) }
-	l.setLines = func(dtr, rts bool) error { return setLines(f, dtr, rts) }
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "flash: "+format+"\n", a...) }
+
+	// the port is opened only to find the board or to flash
+	var f *os.File
+	var l *loader
+	openPort := func() error {
+		if l != nil {
+			return nil
+		}
+		var err error
+		if f, err = openSerial(*port, romBaud); err != nil {
+			return fmt.Errorf("%s: %v", *port, err)
+		}
+		l = newLoader(f)
+		l.setBaud = func(b int) error { return setBaud(f, b) }
+		l.setLines = func(dtr, rts bool) error { return setLines(f, dtr, rts) }
+		return nil
+	}
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
 
 	path := *imagePath
 	if path == "" {
 		if *board == "" {
+			if err := openPort(); err != nil {
+				return fail("%v", err)
+			}
 			b, err := l.detectBoard(bauds, 7*time.Second, logf)
 			if err != nil {
 				return fail("%v; give --board crowpanel7 or --board crowpanel5", err)
@@ -460,7 +498,7 @@ func flashMain(args []string) int {
 			logf("found a %s", b)
 			*board = b
 		}
-		p, err := findImage(*board)
+		p, err := findImage(*board, firmwareDirs())
 		if err != nil {
 			return fail("%v", err)
 		}
@@ -480,6 +518,9 @@ func flashMain(args []string) int {
 	if *dryRun {
 		logf("would write %s (%d KB) to %s at 0x%x", path, len(image)>>10, *port, *addr)
 		return 0
+	}
+	if err := openPort(); err != nil {
+		return fail("%v", err)
 	}
 	fmt.Fprintf(os.Stderr, "flash: writing %s (%d KB) to %s at 0x%x\n", path, len(image)>>10, *port, *addr)
 	start := time.Now()

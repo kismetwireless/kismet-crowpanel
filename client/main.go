@@ -42,6 +42,12 @@ func main() {
 		// the binary normally sits in client/
 		webDefault = filepath.Join(filepath.Dir(exe), "..", "web", "dist")
 	}
+	// installed by make install-web
+	if web := filepath.Join(dataDir, "web"); dataDir != "" {
+		if _, err := os.Stat(filepath.Join(web, "index.html")); err == nil {
+			webDefault = web
+		}
+	}
 
 	kismetURL := flag.String("kismet", "http://localhost:2501", "Kismet server URL")
 	apikey := flag.String("apikey", os.Getenv("KISMET_APIKEY"), "Kismet API key (or $KISMET_APIKEY)")

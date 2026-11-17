@@ -145,6 +145,11 @@ The service runs the client with the settings in
 `SYSCONFDIR/kismet-screen/kismet-screen.conf` (Kismet URL, login, panel
 port), as a locked-down dynamic user in the `dialout` group.
 
+`make install` also puts the prebuilt panel firmware in
+`DATADIR/kismet-crowpanel/firmware`, where `kismet-crowpanel flash` looks
+first; packages that build with plain `go build` should install it in
+`PREFIX/share/kismet-crowpanel/firmware`, beside the binary's `bin/`.
+
 ## Firmware
 
 Prebuilt images for both boards are in `firmware/prebuilt/` (USB serial

@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -221,5 +223,27 @@ func TestDetectBoard(t *testing.T) {
 	}
 	if _, _, err := detectWith(t, 0, nil); err == nil {
 		t.Error("silence: want an error")
+	}
+}
+
+func TestFindImageOrder(t *testing.T) {
+	installed, tree := t.TempDir(), t.TempDir()
+	for _, d := range []string{installed, tree} {
+		if err := os.WriteFile(filepath.Join(d, "crowpanel5.bin"), []byte{espImageMagic}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p, err := findImage("crowpanel5", []string{installed, tree}); err != nil || filepath.Dir(p) != installed {
+		t.Fatalf("got %q %v, want the installed one", p, err)
+	}
+	if _, err := findImage("crowpanel7", []string{installed, tree}); err == nil || !strings.Contains(err.Error(), installed) {
+		t.Fatalf("want an error naming the dirs searched, got %v", err)
+	}
+
+	saved := dataDir
+	defer func() { dataDir = saved }()
+	dataDir = "/usr/share/kismet-crowpanel"
+	if d := firmwareDirs(); d[0] != "/usr/share/kismet-crowpanel/firmware" {
+		t.Fatalf("firmware dirs %v: want the configured data dir first", d)
 	}
 }

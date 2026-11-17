@@ -23,7 +23,7 @@ Installation directories:
   --exec-prefix=EPREFIX    install binaries under EPREFIX [PREFIX]
   --bindir=DIR             the helper binary [EPREFIX/bin]
   --datarootdir=DIR        read-only data root [PREFIX/share]
-  --datadir=DIR            the web viewer, under DIR/kismet-screen [DATAROOTDIR]
+  --datadir=DIR            firmware and web viewer, under DIR/kismet-crowpanel [DATAROOTDIR]
   --sysconfdir=DIR         the config, under DIR/kismet-screen [PREFIX/etc]
   --with-systemdunitdir=DIR
                            the systemd service [PREFIX/lib/systemd/system]
@@ -118,7 +118,8 @@ subst packaging/systemd/kismet-screen.conf
 cat <<SUMMARY
 
   helper binary   $bindir/kismet-crowpanel
-  web viewer      $datadir/kismet-screen/web (make install-web)
+  panel firmware  $datadir/kismet-crowpanel/firmware
+  web viewer      $datadir/kismet-crowpanel/web (make install-web)
   config          $sysconfdir/kismet-screen/kismet-screen.conf
   systemd unit    $systemdunitdir/kismet-screen.service
 

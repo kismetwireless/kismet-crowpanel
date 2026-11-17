@@ -10,13 +10,15 @@ top_srcdir = @top_srcdir@
 
 INSTALL = install
 CLIENT = client/kismet-crowpanel
+PKGDATA = $(datadir)/kismet-crowpanel
+FIRMWARE = firmware/prebuilt/crowpanel7.bin firmware/prebuilt/crowpanel5.bin firmware/prebuilt/SHA256SUMS
 UNIT = packaging/systemd/kismet-screen.service
 CONF = packaging/systemd/kismet-screen.conf
 
 all: configured $(CLIENT)
 
 $(CLIENT): FORCE
-	cd client && $(GO) build -o kismet-crowpanel .
+	cd client && $(GO) build -ldflags "-X 'main.dataDir=$(PKGDATA)'" -o kismet-crowpanel .
 
 # Makefile and the service and config are out of date with their templates
 configured:
@@ -27,8 +29,10 @@ configured:
 	done
 
 install: all
-	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(systemdunitdir) $(DESTDIR)$(sysconfdir)/kismet-screen
+	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(systemdunitdir) $(DESTDIR)$(sysconfdir)/kismet-screen \
+		$(DESTDIR)$(PKGDATA)/firmware
 	$(INSTALL) -m 0755 $(CLIENT) $(DESTDIR)$(bindir)/kismet-crowpanel
+	$(INSTALL) -m 0644 $(FIRMWARE) $(DESTDIR)$(PKGDATA)/firmware/
 	$(INSTALL) -m 0644 $(UNIT) $(DESTDIR)$(systemdunitdir)/kismet-screen.service
 	@# never replace a config that may hold credentials
 	@if [ -e $(DESTDIR)$(sysconfdir)/kismet-screen/kismet-screen.conf ]; then \
@@ -41,14 +45,15 @@ install: all
 # the web viewer, for --web; build it first with web/build.sh
 install-web:
 	@[ -f web/dist/index.html ] || { echo "no web/dist: run web/build.sh first" >&2; exit 1; }
-	$(INSTALL) -d $(DESTDIR)$(datadir)/kismet-screen/web
-	$(INSTALL) -m 0644 web/dist/index.html web/dist/widget.js web/dist/widget.wasm $(DESTDIR)$(datadir)/kismet-screen/web/
+	$(INSTALL) -d $(DESTDIR)$(PKGDATA)/web
+	$(INSTALL) -m 0644 web/dist/index.html web/dist/widget.js web/dist/widget.wasm $(DESTDIR)$(PKGDATA)/web/
 
 # leaves the config, which may hold credentials
 uninstall:
 	rm -f $(DESTDIR)$(bindir)/kismet-crowpanel $(DESTDIR)$(systemdunitdir)/kismet-screen.service
-	rm -f $(DESTDIR)$(datadir)/kismet-screen/web/index.html $(DESTDIR)$(datadir)/kismet-screen/web/widget.js \
-		$(DESTDIR)$(datadir)/kismet-screen/web/widget.wasm
+	rm -f $(DESTDIR)$(PKGDATA)/web/index.html $(DESTDIR)$(PKGDATA)/web/widget.js $(DESTDIR)$(PKGDATA)/web/widget.wasm
+	rm -f $(DESTDIR)$(PKGDATA)/firmware/crowpanel7.bin $(DESTDIR)$(PKGDATA)/firmware/crowpanel5.bin \
+		$(DESTDIR)$(PKGDATA)/firmware/SHA256SUMS
 
 clean:
 	rm -f $(CLIENT)
