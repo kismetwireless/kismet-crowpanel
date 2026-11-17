@@ -1,0 +1,10 @@
+{
+    "name": "kismet-crowpanel-ui",
+    "version": "0.1.0",
+    "description": "Shared LVGL UI for the Kismet CrowPanel widget",
+    "frameworks": "*",
+    "platforms": "*",
+    "build": {
+        "srcFilter": ["+<*.cpp>"]
+    }
+}

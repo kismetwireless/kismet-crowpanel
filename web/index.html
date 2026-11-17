@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kismet CrowPanel Viewer</title>
+<style>
+  :root { --bg: #1a1d21; --fg: #d8dde2; --muted: #8a949e; --bezel: #050607; --accent: #5fb84a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 16px; color: var(--muted); }
+  h1 b { color: var(--accent); }
+  .bezel { background: var(--bezel); padding: 28px 34px; border-radius: 14px;
+           box-shadow: 0 10px 40px #0008, inset 0 0 0 2px #222; max-width: 100%; }
+  canvas { display: block; width: calc(800px * var(--scale, 1)); max-width: 100%;
+           aspect-ratio: 800 / 480; image-rendering: pixelated; cursor: pointer; touch-action: none; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 16px;
+         color: var(--muted); }
+  button, input { background: #262b31; color: var(--fg); border: 1px solid #3a4148;
+                  border-radius: 6px; padding: 5px 10px; font: inherit; }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  input { width: 320px; max-width: 100%; }
+  #status { min-width: 200px; }
+  pre { max-width: 868px; width: 100%; max-height: 300px; overflow: auto; background: #111417;
+        padding: 12px; border-radius: 8px; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<h1><b>KISMET</b> widget viewer &middot; CrowPanel 7.0" 800&times;480</h1>
+<div class="bezel"><canvas id="screen" width="800" height="480"></canvas></div>
+<div class="bar">
+  <span>Scale</span>
+  <button data-scale="1" aria-pressed="true">1&times;</button>
+  <button data-scale="1.5">1.5&times;</button>
+  <label>State URL <input id="url"></label>
+  <button id="pause">Pause</button>
+  <button id="raw">Show JSON</button>
+  <span id="status">loading&hellip;</span>
+</div>
+<pre id="json"></pre>
+<script>
+(() => {
+  const canvas = document.getElementById('screen');
+  const statusEl = document.getElementById('status');
+  const urlEl = document.getElementById('url');
+  const jsonEl = document.getElementById('json');
+  const params = new URLSearchParams(location.search);
+  const interval = Number(params.get('interval') || 2000);
+  urlEl.value = params.get('state') || 'api/v1/state.json';
+
+  let paused = false;
+  let lastText = '';
+
+  window.Module = {
+    kwCtx: canvas.getContext('2d'),
+    // Panel settings live in this browser
+    kwSaveSettings(bytes) {
+      try {
+        localStorage.setItem('kwSettings', Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(''));
+      } catch (e) { /* private window: settings last until reload */ }
+    },
+    // ?backlight=1 dims the canvas like the panel's backlight
+    kwBacklight(level) {
+      if (params.get('backlight') === '1')
+        canvas.style.filter = `brightness(${(0.25 + 0.75 * level / 255).toFixed(2)})`;
+    },
+    kwReady() {
+      try {
+        const hex = localStorage.getItem('kwSettings') || '';
+        if (/^([0-9a-f]{2})+$/.test(hex)) pushBytes(Module._widget_settings,
+                                                     new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16))).buffer);
+      } catch (e) { /* none saved */ }
+      // ?page=map|dash|devices|sources|alerts|settings (or 0-5), ?theme=auto|day|night
+      const pages = ['map', 'dash', 'devices', 'sources', 'alerts', 'settings'];
+      const pg = params.get('page');
+      if (pg !== null) Module._widget_show_page(pages.includes(pg) ? pages.indexOf(pg) : Number(pg));
+      const themes = ['auto', 'day', 'night'];
+      if (themes.includes(params.get('theme'))) Module._widget_set_theme(themes.indexOf(params.get('theme')));
+      poll();
+      pollTrack();
+    },
+    // Tiles come from the same client as the state document
+    kwTile(z, x, y, skin, cached) {
+      const skins = ['classic', 'amber', 'ocean', 'sunlight', 'red', 'cyberpunk'];
+      const url = new URL(`tiles/${skins[skin] ?? 'classic'}/${z}/${x}/${y}.png${cached ? '?cached=1' : ''}`,
+                          apiBase());
+      fetch(url).then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.arrayBuffer();
+      }).then(ab => {
+        const bytes = new Uint8Array(ab);
+        const p = Module._malloc(bytes.length);
+        Module.HEAPU8.set(bytes, p);
+        Module._widget_tile(z, x, y, skin, p, bytes.length);
+        Module._free(p);
+      }).catch(() => Module._widget_tile_failed(z, x, y, skin));
+    },
+    // Markers, track and device details are binary or JSON from the client,
+    // handed to the UI as they are
+    kwView(seq, z, lat, lon, w, h, phy, nw, age) {
+      const url = new URL(`markers?seq=${seq}&z=${z}&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}&w=${w}&h=${h}` +
+                          `&phy=${phy}&new=${nw}&age=${age}`, apiBase());
+      fetch(url).then(r => r.ok ? r.arrayBuffer() : null).then(ab => {
+        if (ab) pushBytes(Module._widget_markers, ab);
+      }).catch(() => {});
+    },
+    kwDetail(id) {
+      fetch(new URL(`device/${id}.json`, apiBase())).then(r => r.ok ? r.text() : null).then(t => {
+        if (t) Module.ccall('widget_detail', null, ['string'], [t]);
+      }).catch(() => {});
+    },
+    kwConsent(url, allow) {
+      fetch(new URL('map/consent', apiBase()), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, allow }),
+      }).then(() => setTimeout(pollOnce, 200)).catch(e => console.warn('consent', e));
+    },
+    print: t => console.log(t),
+    printErr: t => console.warn(t),
+  };
+
+  // link_state enum in widget_model.h
+  const LINK_CLIENT_DOWN = 3;
+
+  // api/v1/ next to the state document
+  function apiBase() {
+    return new URL('.', new URL(urlEl.value, location.href));
+  }
+
+  function pushBytes(fn, ab) {
+    const bytes = new Uint8Array(ab);
+    const p = Module._malloc(bytes.length);
+    Module.HEAPU8.set(bytes, p);
+    fn(p, bytes.length);
+    Module._free(p);
+  }
+
+  async function pollTrack() {
+    try {
+      const r = await fetch(new URL('track', apiBase()), { cache: 'no-store' });
+      if (r.ok) pushBytes(Module._widget_track, await r.arrayBuffer());
+    } catch (e) { /* the state poll reports the link */ }
+    setTimeout(pollTrack, 5000);
+  }
+
+  async function poll() {
+    await pollOnce();
+    setTimeout(poll, interval);
+  }
+
+  async function pollOnce() {
+    if (!paused) {
+      try {
+        const r = await fetch(urlEl.value, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        lastText = await r.text();
+        const ok = Module.ccall('widget_push_state', 'number', ['string'], [lastText]);
+        statusEl.textContent = ok ? 'updated ' + new Date().toLocaleTimeString() : 'bad state document';
+        if (jsonEl.style.display === 'block')
+          jsonEl.textContent = JSON.stringify(JSON.parse(lastText), null, 2);
+      } catch (e) {
+        Module.ccall('widget_set_link', null, ['number', 'string'], [LINK_CLIENT_DOWN, 'no client']);
+        statusEl.textContent = 'fetch failed: ' + e.message;
+      }
+    }
+  }
+
+  function screenXY(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - r.left) * 800 / r.width);
+    const y = Math.round((e.clientY - r.top) * 480 / r.height);
+    return [Math.max(0, Math.min(799, x)), Math.max(0, Math.min(479, y))];
+  }
+
+  // One pointer is the touch panel's finger; a second makes it a pinch,
+  // which lasts until every pointer is up, as on the panel
+  const pointers = new Map();
+  let down = 0, pinch = null, last = [0, 0];
+  function pinchGeom() {
+    const [a, b] = [...pointers.values()];
+    return { x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, d: Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1])) };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, screenXY(e));
+    if (pointers.size === 2 && !pinch) {
+      const g = pinchGeom();
+      pinch = { d0: g.d };
+      Module._widget_pinch(0, g.x, g.y, 1);
+    } else if (pointers.size === 1 && !pinch) {
+      down = 1;
+      last = screenXY(e);
+      Module._widget_pointer(last[0], last[1], 1);
+    }
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId) && down) return;
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, screenXY(e));
+    if (pinch) {
+      if (pointers.size === 2) {
+        const g = pinchGeom();
+        Module._widget_pinch(1, g.x, g.y, g.d / pinch.d0);
+      }
+      return;
+    }
+    last = screenXY(e);
+    Module._widget_pointer(last[0], last[1], down);
+  });
+  function pointerUp(e) {
+    pointers.delete(e.pointerId);
+    if (pinch) {
+      if (pointers.size === 0) {
+        Module._widget_pinch(2, 0, 0, 1);
+        pinch = null;
+        down = 0;
+        Module._widget_pointer(last[0], last[1], 0);
+      }
+      return;
+    }
+    down = 0;
+    last = screenXY(e);
+    Module._widget_pointer(last[0], last[1], 0);
+  }
+  canvas.addEventListener('pointerup', pointerUp);
+  canvas.addEventListener('pointercancel', pointerUp);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const [x, y] = screenXY(e);
+    Module._widget_wheel(x, y, e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+
+  document.querySelectorAll('[data-scale]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-scale]').forEach(o => o.setAttribute('aria-pressed', o === b));
+    canvas.style.setProperty('--scale', b.dataset.scale);
+  }));
+  document.getElementById('pause').addEventListener('click', e => {
+    paused = !paused;
+    e.target.textContent = paused ? 'Resume' : 'Pause';
+    e.target.setAttribute('aria-pressed', paused);
+  });
+  document.getElementById('raw').addEventListener('click', e => {
+    const show = jsonEl.style.display !== 'block';
+    jsonEl.style.display = show ? 'block' : 'none';
+    e.target.textContent = show ? 'Hide JSON' : 'Show JSON';
+    if (show && lastText) jsonEl.textContent = JSON.stringify(JSON.parse(lastText), null, 2);
+  });
+})();
+</script>
+<script src="widget.js"></script>
+</body>
+</html>

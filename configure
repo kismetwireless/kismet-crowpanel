@@ -1,0 +1,126 @@
+#!/bin/sh
+# Sets the install paths for the PC-side helper, autoconf style, and makes
+# Makefile and the systemd service and config from their .in templates.
+#
+#   ./configure [--prefix=/usr/local] [options]; make; make install
+
+set -e
+
+prefix=/usr/local
+exec_prefix='${prefix}'
+bindir='${exec_prefix}/bin'
+datarootdir='${prefix}/share'
+datadir='${datarootdir}'
+sysconfdir='${prefix}/etc'
+systemdunitdir='${prefix}/lib/systemd/system'
+
+usage() {
+    cat <<USAGE
+Usage: ./configure [OPTION]...
+
+Installation directories:
+  --prefix=PREFIX          install under PREFIX [/usr/local]
+  --exec-prefix=EPREFIX    install binaries under EPREFIX [PREFIX]
+  --bindir=DIR             the helper binary [EPREFIX/bin]
+  --datarootdir=DIR        read-only data root [PREFIX/share]
+  --datadir=DIR            the web viewer, under DIR/kismet-screen [DATAROOTDIR]
+  --sysconfdir=DIR         the config, under DIR/kismet-screen [PREFIX/etc]
+  --with-systemdunitdir=DIR
+                           the systemd service [PREFIX/lib/systemd/system]
+
+Some influential environment variables:
+  GO                       the Go toolchain [go]
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    opt=$1
+    shift
+    case $opt in
+        --*=*) val=${opt#*=}; opt=${opt%%=*} ;;
+        --help|-h) usage; exit 0 ;;
+        --prefix|--exec-prefix|--bindir|--datarootdir|--datadir|--sysconfdir|--with-systemdunitdir)
+            if [ $# -eq 0 ]; then
+                echo "configure: $opt needs a value" >&2
+                exit 1
+            fi
+            val=$1
+            shift
+            ;;
+        *) echo "configure: unknown option $opt (see --help)" >&2; exit 1 ;;
+    esac
+    case $opt in
+        --prefix) prefix=$val ;;
+        --exec-prefix) exec_prefix=$val ;;
+        --bindir) bindir=$val ;;
+        --datarootdir) datarootdir=$val ;;
+        --datadir) datadir=$val ;;
+        --sysconfdir) sysconfdir=$val ;;
+        --with-systemdunitdir) systemdunitdir=$val ;;
+        *) echo "configure: unknown option $opt (see --help)" >&2; exit 1 ;;
+    esac
+done
+
+# expand the ${...} references; the service needs absolute paths
+expand() {
+    v=$1
+    while :; do
+        n=$(eval "echo \"$v\"")
+        [ "$n" = "$v" ] && break
+        v=$n
+    done
+    echo "$v"
+}
+prefix=$(expand "$prefix")
+exec_prefix=$(expand "$exec_prefix")
+bindir=$(expand "$bindir")
+datarootdir=$(expand "$datarootdir")
+datadir=$(expand "$datadir")
+sysconfdir=$(expand "$sysconfdir")
+systemdunitdir=$(expand "$systemdunitdir")
+
+for d in "$prefix" "$bindir" "$datadir" "$sysconfdir" "$systemdunitdir"; do
+    case $d in
+        /*) ;;
+        *) echo "configure: $d is not an absolute path" >&2; exit 1 ;;
+    esac
+done
+
+GO=${GO:-go}
+if ! command -v "$GO" >/dev/null 2>&1; then
+    echo "configure: warning: $GO not found; make needs Go to build the helper" >&2
+fi
+
+top=$(cd "$(dirname "$0")" && pwd)
+
+# sed replacement text: escape \, & and the | delimiter
+esc() {
+    printf '%s\n' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
+subst() {
+    sed -e "s|@prefix@|$(esc "$prefix")|g" \
+        -e "s|@bindir@|$(esc "$bindir")|g" \
+        -e "s|@datadir@|$(esc "$datadir")|g" \
+        -e "s|@sysconfdir@|$(esc "$sysconfdir")|g" \
+        -e "s|@systemdunitdir@|$(esc "$systemdunitdir")|g" \
+        -e "s|@GO@|$(esc "$GO")|g" \
+        -e "s|@top_srcdir@|$(esc "$top")|g" \
+        "$top/$1.in" > "$top/$1.tmp"
+    mv "$top/$1.tmp" "$top/$1"
+    echo "configure: wrote $1"
+}
+
+subst Makefile
+subst packaging/systemd/kismet-screen.service
+subst packaging/systemd/kismet-screen.conf
+
+cat <<SUMMARY
+
+  helper binary   $bindir/kismet-crowpanel
+  web viewer      $datadir/kismet-screen/web (make install-web)
+  config          $sysconfdir/kismet-screen/kismet-screen.conf
+  systemd unit    $systemdunitdir/kismet-screen.service
+
+Now run make, then make install.
+SUMMARY

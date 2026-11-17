@@ -1,0 +1,10 @@
+deps/
+cache/
+web/dist/
+firmware/.pio/
+firmware/include/widget_config.h
+__pycache__/
+client/kismet-crowpanel
+/Makefile
+/packaging/systemd/kismet-screen.service
+/packaging/systemd/kismet-screen.conf
