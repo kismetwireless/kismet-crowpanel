@@ -166,3 +166,41 @@ func TestNextRate(t *testing.T) {
 		t.Error("--baud 115200 stays there")
 	}
 }
+
+func TestSerialRateBadFrames(t *testing.T) {
+	p, l := startSession(t, 921600)
+	p.hello(link.LinkBaud)
+	p.askedRate()
+	p.send(link.Baud, le32(921600))
+	p.hello(921600)
+	p.next(link.State)
+	bad := link.Encode(link.Hello, []byte(`{"v":1}`))
+	bad[len(bad)-1] ^= 0xff
+	for range linkBadMax {
+		if _, err := p.conn.Write(bad); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(p.switched()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	p.close()
+	if r := p.switched(); !slices.Equal(r, []int{921600, link.LinkBaud}) || !l.failed[921600] {
+		t.Errorf("switched %v, failed %v", r, l.failed)
+	}
+}
+
+func TestParseBaud(t *testing.T) {
+	if b, err := parseBaud("auto"); err != nil || b != linkRates[0] {
+		t.Errorf("auto: %d, %v", b, err)
+	}
+	if b, err := parseBaud("460800"); err != nil || b != 460800 {
+		t.Errorf("460800: %d, %v", b, err)
+	}
+	for _, v := range []string{"fast", "9600", ""} {
+		if _, err := parseBaud(v); err == nil {
+			t.Errorf("%q accepted", v)
+		}
+	}
+}

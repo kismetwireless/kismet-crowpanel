@@ -65,7 +65,7 @@ passes them; an option on the command line wins:
 | `KISMET_USER` | `--user` | Kismet login, with `KISMET_PASSWORD` |
 | `KISMET_PASSWORD` | `--password` | Kismet password |
 | `CROWPANEL_SERIAL` | `--serial` | the panel's port, or `auto` |
-| `CROWPANEL_BAUD` | `--baud` | link rate to move the panel to (default 921600) |
+| `CROWPANEL_BAUD` | `--baud` | link rate to move the panel to, or `auto` (the default) |
 
 ### Finding the panel
 
@@ -91,13 +91,15 @@ If a panel's bridge is on USB but has no serial port, the client says so: on
 Ubuntu that's brltty claiming the CH340; remove brltty, or mask its udev
 rule.
 
-Once the panel has said hello, the client asks it for `--baud` (921600 by
-default).  If the panel refuses or can't be heard at that rate, the client
-steps down (921600, 460800, 230400) and stays at 115200 if none works.
-Either side goes back to 115200 when the other goes quiet, so a restarted
-client or panel finds the other again within a few seconds.  On macOS the
-CH340 garbles 921600; the client steps down to 460800 by itself, or give
-`--baud 460800`.
+Once the panel has said hello, the client asks it for `--baud`; with `auto`,
+the default, that's the fastest rate the firmware takes.  If the panel
+refuses, can't be heard at that rate, or its frames keep failing their CRC
+(3 in 30 seconds), the client steps down (2000000, 1500000, 921600, 460800,
+230400) and stays at 115200 if none works.  Either side goes back to 115200
+when the other goes quiet, so a restarted client or panel finds the other
+again within a few seconds; finding a working rate can take a few tries at
+startup.  The CH340 runs at 2000000 on both Linux and macOS, though on
+macOS it garbles 921600; a `--baud 921600` there steps down to 460800.
 
 ## Map tiles
 
@@ -196,7 +198,7 @@ KISMET_APIKEY=                    # an API key, or
 KISMET_USER=kismet                # a user and password
 KISMET_PASSWORD=secret
 CROWPANEL_SERIAL=auto             # or /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
-CROWPANEL_BAUD=921600
+CROWPANEL_BAUD=auto               # or a rate, as --baud
 KISMET_SCREEN_ARGS="--listen 127.0.0.1 --web"   # any other options
 ```
 
@@ -245,8 +247,7 @@ firmware/prebuild.sh        # the images in firmware/prebuilt
 
 Pins and panel timings follow Elecrow's examples for each board.  On v3.0
 boards the touch controller is reset through a PCA9557; the firmware detects
-that at startup.  On macOS the CH340 USB bridge garbles 921600 baud; run
-the client with `--baud 460800`.
+that at startup.
 
 
 ## License

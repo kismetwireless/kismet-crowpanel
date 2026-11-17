@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	"kismet-crowpanel/link"
 	"kismet-crowpanel/tiles"
 )
 
@@ -71,12 +72,9 @@ func main() {
 	demoMapURL := flag.String("demo-map-url", "",
 		"with --demo: tile URL template standing in for Kismet's setting (default OSM)")
 	demoMapTiles := flag.String("demo-map-tiles", "ask", "with --demo: Kismet's httpd_map_tiles stand-in (ask|deny)")
-	baudDefault, err := envInt("CROWPANEL_BAUD", 921600)
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
-	baud := flag.Int("baud", baudDefault, "serial link rate to move the panel to from its starting 115200, or\n"+
-		"the fastest slower one that works (or $CROWPANEL_BAUD)")
+	baudArg := flag.String("baud", firstOf(os.Getenv("CROWPANEL_BAUD"), "auto"),
+		"serial link rate to move the panel to from its starting 115200, or the fastest\n"+
+			"slower one that works; auto starts at the fastest the firmware takes (or $CROWPANEL_BAUD)")
 	flag.BoolVar(&verbose, "v", false, "verbose logging")
 	flag.BoolVar(&verbose, "verbose", false, "verbose logging")
 	flag.Usage = func() {
@@ -90,8 +88,9 @@ func main() {
 	if *demoMapTiles != "ask" && *demoMapTiles != "deny" {
 		log.Fatalf("--demo-map-tiles must be ask or deny")
 	}
-	if *serial != "" && !baudOK(*baud) {
-		log.Fatalf("unsupported baud rate %d", *baud)
+	baud, err := parseBaud(*baudArg)
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
 	if err := checkLinks(*serial, *listen, *web); err != nil {
 		log.Fatalf("%v", err)
@@ -125,7 +124,7 @@ func main() {
 	every := time.Duration(*interval * float64(time.Second))
 	go st.run(p, every)
 	if *serial != "" {
-		l := &serialLink{st: st, path: *serial, baud: *baud, interval: every}
+		l := &serialLink{st: st, path: *serial, baud: baud, interval: every}
 		go l.run()
 	}
 
@@ -154,14 +153,14 @@ func main() {
 	}
 }
 
-func envInt(name string, def int) (int, error) {
-	v := os.Getenv(name)
-	if v == "" {
-		return def, nil
+// parseBaud reads --baud: a rate, or auto for the fastest in linkRates
+func parseBaud(v string) (int, error) {
+	if v == "auto" {
+		return linkRates[0], nil
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil {
-		return 0, fmt.Errorf("$%s: %q isn't a number", name, v)
+	if err != nil || !baudOK(n) || n < link.LinkBaud {
+		return 0, fmt.Errorf("--baud: %q isn't auto or a rate from %d up", v, link.LinkBaud)
 	}
 	return n, nil
 }
