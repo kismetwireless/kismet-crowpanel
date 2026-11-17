@@ -173,6 +173,17 @@ bool parse_state(const char *json, size_t len, widget_state &out) {
         d.sev = parse_sev(p["severity"].as<int>());
     }
 
+    JsonObjectConst n = doc["notify"];
+    s.notify.id = n["id"].as<uint32_t>();
+    const char *lv = n["level"].as<const char *>();
+    s.notify.level = lv == nullptr ? notify_level::info
+                     : strcmp(lv, "alert") == 0 ? notify_level::alert
+                     : strcmp(lv, "warn") == 0  ? notify_level::warn
+                                                : notify_level::info;
+    copy_str(s.notify.title, n["title"]);
+    copy_str(s.notify.text, n["text"]);
+    s.notify.secs = n["secs"].as<uint16_t>();
+
     return true;
 }
 

@@ -75,7 +75,7 @@ constexpr uint32_t color_of(const palette &p, role r) {
     return p.text;
 }
 
-enum class prop : uint8_t { bg, text, border, line };
+enum class prop : uint8_t { bg, text, border, line, arc };
 
 struct binding {
     lv_obj_t *obj;
@@ -257,6 +257,7 @@ void apply_binding(const binding &b) {
         case prop::text: lv_obj_set_style_text_color(b.obj, col, b.sel); break;
         case prop::border: lv_obj_set_style_border_color(b.obj, col, b.sel); break;
         case prop::line: lv_obj_set_style_line_color(b.obj, col, b.sel); break;
+        case prop::arc: lv_obj_set_style_arc_color(b.obj, col, b.sel); break;
     }
 }
 
@@ -612,8 +613,24 @@ struct alert_row {
     lv_obj_t *row, *stripe, *head, *clock, *text;
 };
 
+// over every page: the banner while there's no link, and messages from
+// scripts on the client's machine
+struct overlay_objs {
+    lv_obj_t *conn, *conn_msg;
+    lv_obj_t *note, *note_title, *note_text;
+};
+
+// the message on show; secs from when it arrived, 0 until the next one
+struct note_state {
+    uint32_t id;
+    bool dismissed;
+    uint32_t arrived;
+    uint32_t ms;
+};
+
 struct ui_objs {
     status_objs st;
+    overlay_objs over;
     nav_btn nav[static_cast<size_t>(page::count)];
     lv_obj_t *pages[static_cast<size_t>(page::count)];
 
@@ -632,6 +649,7 @@ struct ui_objs {
 };
 
 ui_objs ui;
+note_state note;
 map_view mv;
 track_cache tc;
 page cur_page = page::dashboard;
@@ -2237,6 +2255,99 @@ void render_link() {
         set_label(ui.st.server, cur_msg[0] ? cur_msg : txt);
         set_text_color(ui.st.server, color);
     }
+
+    const bool down = cur_link == link_state::waiting || cur_link == link_state::client_down;
+    set_visible(ui.over.conn, down);
+    if (down)
+        set_label(ui.over.conn_msg, cur_msg[0] ? cur_msg : "waiting for the client");
+}
+
+bool note_showing() {
+    return last.notify.id != 0 && last.notify.id == note.id && !note.dismissed &&
+           (note.ms == 0 || lv_tick_elaps(note.arrived) < note.ms);
+}
+
+void render_note(const widget_state &s) {
+    const bool show = have_last && note_showing();
+    set_visible(ui.over.note, show);
+    if (!show)
+        return;
+    const auto &n = s.notify;
+    uint32_t col = pal->info;
+    const char *sym = LV_SYMBOL_BELL, *head = "Notice";
+    if (n.level == notify_level::warn) {
+        col = pal->warn;
+        sym = LV_SYMBOL_WARNING;
+        head = "Warning";
+    } else if (n.level == notify_level::alert) {
+        col = pal->err;
+        sym = LV_SYMBOL_WARNING;
+        head = "Alert";
+    }
+    lv_obj_set_style_border_color(ui.over.note, c(col), 0);
+    set_label_fmt(ui.over.note_title, "%s  %s", sym, n.title[0] ? n.title : head);
+    set_text_color(ui.over.note_title, col);
+    set_label(ui.over.note_text, n.text);
+}
+
+void on_note_tap(lv_event_t *) {
+    note.dismissed = true;
+    set_visible(ui.over.note, false);
+}
+
+void on_note_tick(lv_timer_t *) {
+    if (!lv_obj_has_flag(ui.over.note, LV_OBJ_FLAG_HIDDEN) && !note_showing())
+        set_visible(ui.over.note, false);
+}
+
+void build_overlays(lv_obj_t *top) {
+    auto &o = ui.over;
+    constexpr int32_t cw = 380;
+    o.conn = make_panel(top, rail_w + (content_w - cw) / 2, 0, cw, LV_SIZE_CONTENT);
+    lv_obj_align(o.conn, LV_ALIGN_CENTER, rail_w / 2, status_h / 2);
+    lv_obj_set_style_pad_all(o.conn, 16, 0);
+    lv_obj_set_style_border_width(o.conn, 2, 0);
+    bind(o.conn, prop::border, role::accent);
+    lv_obj_set_flex_flow(o.conn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(o.conn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(o.conn, 16, 0);
+
+    lv_obj_t *spin = lv_spinner_create(o.conn);
+    lv_obj_set_size(spin, 40, 40);
+    lv_obj_remove_flag(spin, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(spin, 5, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spin, 5, LV_PART_INDICATOR);
+    bind(spin, prop::arc, role::panel_hi, LV_PART_MAIN);
+    bind(spin, prop::arc, role::accent, LV_PART_INDICATOR);
+
+    lv_obj_t *col = lv_obj_create(o.conn);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, cw - 32 - 40 - 16, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, 4, 0);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE);
+    make_label(col, &lv_font_montserrat_20, role::text, "Connecting");
+    o.conn_msg = make_label(col, &lv_font_montserrat_14, role::muted, "");
+    lv_obj_set_width(o.conn_msg, LV_PCT(100));
+    lv_label_set_long_mode(o.conn_msg, LV_LABEL_LONG_WRAP);
+    lv_obj_add_flag(o.conn, LV_OBJ_FLAG_HIDDEN);
+
+    constexpr int32_t nw = 480;
+    o.note = make_panel(top, rail_w + (content_w - nw) / 2, status_h + 10, nw, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(o.note, 14, 0);
+    lv_obj_set_style_border_width(o.note, 3, 0);
+    lv_obj_set_flex_flow(o.note, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(o.note, 6, 0);
+    lv_obj_add_flag(o.note, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(o.note, on_note_tap, LV_EVENT_CLICKED, nullptr);
+    o.note_title = make_label(o.note, &lv_font_montserrat_16, role::text, "");
+    lv_obj_set_width(o.note_title, nw - 34);
+    lv_label_set_long_mode(o.note_title, LV_LABEL_LONG_DOT);
+    o.note_text = make_label(o.note, &lv_font_montserrat_20, role::text, "");
+    lv_obj_set_width(o.note_text, nw - 34);
+    lv_label_set_long_mode(o.note_text, LV_LABEL_LONG_WRAP);
+    lv_obj_add_flag(o.note, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_create(on_note_tick, 500, nullptr);
 }
 
 void render(const widget_state &s) {
@@ -2247,6 +2358,7 @@ void render(const widget_state &s) {
     render_sources(s);
     render_alerts(s);
     render_link();
+    render_note(s);
 }
 
 // minutes past midnight from the client's HH:MM:SS, or -1
@@ -2323,6 +2435,7 @@ void ui_create(lv_display_t *disp) {
     build_sources(ui.pages[static_cast<size_t>(page::sources)]);
     build_alerts(ui.pages[static_cast<size_t>(page::alerts)]);
     build_settings(ui.pages[static_cast<size_t>(page::settings)]);
+    build_overlays(lv_display_get_layer_top(disp));
 
     map_on_ready(map_layout);
 
@@ -2524,6 +2637,15 @@ void ui_update(const widget_state &s) {
         mv.fix_tick = lv_tick_get();
         mv.heading = s.gps.heading;
         mv.speed = s.gps.speed;
+    }
+    // a message's time runs from when it first arrives
+    if (s.notify.id != 0 && s.notify.id != note.id) {
+        note = {s.notify.id, false, lv_tick_get(), s.notify.secs * 1000u};
+    } else if (s.notify.id != 0) {
+        // the client counts down too; follow it, so a late document doesn't
+        // keep a message up
+        const uint32_t left = s.notify.secs * 1000u, shown = lv_tick_elaps(note.arrived);
+        note.ms = left == 0 ? 0 : shown + left;
     }
     if (&s != &last)
         memcpy(&last, &s, sizeof(last));

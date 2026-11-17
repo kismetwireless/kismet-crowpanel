@@ -66,6 +66,7 @@ passes them; an option on the command line wins:
 | `KISMET_PASSWORD` | `--password` | Kismet password |
 | `CROWPANEL_SERIAL` | `--serial` | the panel's port, or `auto` |
 | `CROWPANEL_BAUD` | `--baud` | link rate to move the panel to, or `auto` (the default) |
+| `CROWPANEL_NOTIFY` | `--notify` | socket for messages from local scripts (off by default) |
 
 ### Finding the panel
 
@@ -87,6 +88,9 @@ that hello:
 - The panel's port is then held exclusive, so nothing else (ModemManager
   probing, say) opens it.
 
+Until the panel hears from a client, or when it stops hearing from one, it
+shows a "Connecting" banner with what it's waiting for.
+
 If a panel's bridge is on USB but has no serial port, the client says so: on
 Ubuntu that's brltty claiming the CH340; remove brltty, or mask its udev
 rule.
@@ -100,6 +104,37 @@ when the other goes quiet, so a restarted client or panel finds the other
 again within a few seconds; finding a working rate can take a few tries at
 startup.  The CH340 runs at 2000000 on both Linux and macOS, though on
 macOS it garbles 921600; a `--baud 921600` there steps down to 460800.
+
+### Notifications
+
+Scripts on the client's machine can put a message on the panel (and the
+web viewer).  With `--notify SOCKET` the client listens on a Unix socket,
+which the service puts at `/run/kismet-crowpanel/notify.sock`, and
+`kismet-crowpanel notify` sends to it:
+
+```sh
+kismet-crowpanel notify "Backup finished"
+kismet-crowpanel notify --level warn --title Disk "/var/log is 95% full"
+kismet-crowpanel notify --level alert --secs 0 "GPS fix lost"
+df -h / | tail -1 | kismet-crowpanel notify --title "Root disk"
+```
+
+`--level` is `info`, `warn` or `alert`, which picks the message's colour;
+`--secs` is how long it shows (10 by default, 0 until the next message).
+Messages show one at a time, in the order sent; tap one to dismiss it.  With
+no text on the command line, each line of stdin is a message.  `--socket`
+(or `$CROWPANEL_NOTIFY`) names another socket.
+
+Without the helper, write a line to the socket: plain text, or a JSON
+object with `text` and optionally `title`, `level` and `secs`.  Each line
+gets back `ok ID` or `error: why`:
+
+```sh
+echo '{"text":"Survey done","level":"info","secs":30}' | nc -U /run/kismet-crowpanel/notify.sock
+```
+
+Any local user can write to the socket.  Text is cut at 159 bytes, titles
+at 47.
 
 ## Map tiles
 
@@ -199,6 +234,7 @@ KISMET_USER=kismet                # a user and password
 KISMET_PASSWORD=secret
 CROWPANEL_SERIAL=auto             # or /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
 CROWPANEL_BAUD=auto               # or a rate, as --baud
+CROWPANEL_NOTIFY=/run/kismet-crowpanel/notify.sock   # empty: no notifications
 CROWPANEL_ARGS="--listen 127.0.0.1 --web"   # any other options
 ```
 

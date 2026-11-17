@@ -14,13 +14,17 @@ After=network-online.target kismet.service
 Type=simple
 EnvironmentFile=@sysconfdir@/kismet-crowpanel/kismet-crowpanel.conf
 # kismet-crowpanel reads KISMET_URL, KISMET_USER, KISMET_APIKEY,
-# KISMET_PASSWORD, CROWPANEL_SERIAL and CROWPANEL_BAUD from the environment
+# KISMET_PASSWORD, CROWPANEL_SERIAL, CROWPANEL_BAUD and CROWPANEL_NOTIFY
+# from the environment
 ExecStart=@bindir@/kismet-crowpanel --cache-dir %C/kismet-crowpanel $CROWPANEL_ARGS
 Restart=on-failure
 RestartSec=5
 
 DynamicUser=yes
 CacheDirectory=kismet-crowpanel
+# the notify socket, /run/kismet-crowpanel/notify.sock
+RuntimeDirectory=kismet-crowpanel
+RuntimeDirectoryMode=0755
 # for the panel's USB serial port; the group is uucp on Arch
 SupplementaryGroups=dialout
 

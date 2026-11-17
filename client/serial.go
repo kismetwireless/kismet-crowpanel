@@ -385,6 +385,8 @@ func (l *serialLink) session(f serialPort, setRate func(int) error) error {
 				}
 			}
 			timer.Reset(l.interval)
+		case <-l.st.notes.changed:
+			sendNow()
 		case now := <-tick.C:
 			if err := s.checkRate(now, dec.Bad); err != nil {
 				return err
