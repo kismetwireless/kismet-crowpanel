@@ -100,7 +100,7 @@ func (k *kismetAPI) req(path string, body io.Reader) (any, error) {
 		return nil, errors.New("kismet: auth failed")
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("kismet: HTTP %d on %s", resp.StatusCode, path)
+		return nil, &httpError{resp.StatusCode, path}
 	}
 	var v any
 	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
@@ -108,6 +108,13 @@ func (k *kismetAPI) req(path string, body io.Reader) (any, error) {
 	}
 	return v, nil
 }
+
+type httpError struct {
+	code int
+	path string
+}
+
+func (e *httpError) Error() string { return fmt.Sprintf("kismet: HTTP %d on %s", e.code, e.path) }
 
 func (k *kismetAPI) get(path string) (any, error) { return k.req(path, nil) }
 
@@ -138,6 +145,7 @@ type kismetPoller struct {
 	mapPolled   time.Time
 	markerPoll  time.Time
 	markerTS    int64 // Kismet's clock; 1 = everything on the first poll
+	noModified  bool  // Kismet predates /devices/modified-since/
 }
 
 type pktSample struct {
@@ -164,16 +172,22 @@ func (k *kismetPoller) pollMapSettings() {
 	k.tiles.SetSettings(doc)
 }
 
-func (k *kismetPoller) pollMarkers() {
+// pollMarkers fetches the devices changed since the last poll.  The cursor
+// is Kismet's own clock at the poll: a device's last_time is its packets'
+// time, which a capture source with a skewed clock can put in the future,
+// and a cursor taken from it would then skip every device seen after.
+func (k *kismetPoller) pollMarkers(now float64) {
 	if time.Since(k.markerPoll) < markerInterval {
 		return
 	}
 	k.markerPoll = time.Now()
-	devs, err := k.api.list(fmt.Sprintf("/devices/last-time/%d/devices.json", k.markerTS), markerFields)
+	devs, err := k.changedDevices(k.markerTS)
 	if err != nil {
 		log.Printf("WARNING map devices: %v", err)
 		return
 	}
+	// a little overlap for devices updated during the poll
+	k.markerTS = max(k.markerTS, int64(now)-2)
 	for _, d := range devs {
 		lat, lon, reported := markers.Geopoint(d["rep_geo"])
 		ok := reported
@@ -197,9 +211,22 @@ func (k *kismetPoller) pollMarkers() {
 			info.Heading, info.Alt, info.Speed = num(d, "rep_heading"), num(d, "rep_alt"), num(d, "rep_speed")
 		}
 		k.devmap.Update(str(d, "key"), lat, lon, info)
-		// a little overlap so devices updated during the poll aren't missed
-		k.markerTS = max(k.markerTS, int64(num(d, "last"))-2)
 	}
+}
+
+// changedDevices asks for devices modified (any change, on Kismet's clock)
+// after ts, or on older Kismet, seen (by packet time) after it
+func (k *kismetPoller) changedDevices(ts int64) ([]map[string]any, error) {
+	if !k.noModified {
+		devs, err := k.api.list(fmt.Sprintf("/devices/modified-since/%d/devices.json", ts), markerFields)
+		var he *httpError
+		if !errors.As(err, &he) || he.code != http.StatusNotFound {
+			return devs, err
+		}
+		k.noModified = true
+		log.Printf("INFO kismet has no /devices/modified-since/; using last-time for map devices")
+	}
+	return k.api.list(fmt.Sprintf("/devices/last-time/%d/devices.json", ts), markerFields)
 }
 
 func (k *kismetPoller) pollGPS(now float64) gpsDoc {
@@ -277,7 +304,7 @@ func (k *kismetPoller) poll() error {
 		now = nowSecs()
 	}
 	k.devmap.SetClock(now)
-	k.pollMarkers()
+	k.pollMarkers(now)
 
 	var active []map[string]any
 	nw := 0

@@ -102,6 +102,7 @@ type stateDoc struct {
 	Top      []topDoc    `json:"top"`
 	Alerts   alertsDoc   `json:"alerts"`
 	Map      *tiles.Doc  `json:"map,omitempty"`
+	Notify   *notifyDoc  `json:"notify,omitempty"`
 }
 
 func emptyDoc(link, message, server string) stateDoc {
@@ -273,11 +274,13 @@ type state struct {
 	tiles   *tiles.Service
 	devmap  *markers.DeviceMap
 	trail   *markers.TrackLog
+	notes   *notifier
 }
 
 func newState(name string) *state {
 	return &state{name: name, doc: emptyDoc("waiting", "waiting for kismet", name),
-		ppsHist: ring[int64]{n: histLen}, devmap: markers.NewDeviceMap(), trail: &markers.TrackLog{}}
+		ppsHist: ring[int64]{n: histLen}, devmap: markers.NewDeviceMap(), trail: &markers.TrackLog{},
+		notes: newNotifier()}
 }
 
 func (s *state) mapDoc() tiles.Doc {
@@ -293,6 +296,7 @@ func (s *state) snapshot() []byte {
 	defer s.mu.Unlock()
 	s.doc.Clock = clockStr(time.Now())
 	s.doc.Map = &m
+	s.doc.Notify = s.notes.current(time.Now())
 	b, _ := json.Marshal(s.doc)
 	return b
 }

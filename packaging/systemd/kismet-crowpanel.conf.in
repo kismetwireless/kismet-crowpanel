@@ -23,6 +23,11 @@ CROWPANEL_SERIAL=auto
 # firmware takes (2000000) and steps down until the link is clean.
 CROWPANEL_BAUD=auto
 
+# Messages for the panel from scripts on this machine, sent with
+# "kismet-crowpanel notify TEXT".  Any local user can send them; leave it
+# empty to turn them off.
+CROWPANEL_NOTIFY=/run/kismet-crowpanel/notify.sock
+
 # Other options for kismet-crowpanel (see kismet-crowpanel -h):
 #   --listen ADDR      serve HTTP for Wi-Fi panels and --web (off by default):
 #                      0.0.0.0 for the network, 127.0.0.1 for this machine only

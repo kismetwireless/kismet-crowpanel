@@ -33,6 +33,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "flash" {
 		os.Exit(flashMain(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "notify" {
+		os.Exit(notifyMain(os.Args[2:]))
+	}
 	cacheHome := os.Getenv("XDG_CACHE_HOME")
 	if cacheHome == "" {
 		home, _ := os.UserHomeDir()
@@ -75,11 +78,14 @@ func main() {
 	baudArg := flag.String("baud", firstOf(os.Getenv("CROWPANEL_BAUD"), "auto"),
 		"serial link rate to move the panel to from its starting 115200, or the fastest\n"+
 			"slower one that works; auto starts at the fastest the firmware takes (or $CROWPANEL_BAUD)")
+	notify := flag.String("notify", os.Getenv("CROWPANEL_NOTIFY"),
+		"take messages for the panel from local scripts on this Unix `socket` (or $CROWPANEL_NOTIFY)")
 	flag.BoolVar(&verbose, "v", false, "verbose logging")
 	flag.BoolVar(&verbose, "verbose", false, "verbose logging")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: kismet-crowpanel [options]\n"+
-			"       kismet-crowpanel flash --port PORT  (flash a panel's firmware; flash -h for more)\n\n")
+			"       kismet-crowpanel flash --port PORT  (flash a panel's firmware; flash -h for more)\n"+
+			"       kismet-crowpanel notify TEXT...     (show a message on the panel; notify -h for more)\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -118,6 +124,12 @@ func main() {
 		st.tiles = ts
 		if *demo {
 			ts.SetSettings(map[string]any{"url": *demoMapURL, "tiles": *demoMapTiles})
+		}
+	}
+
+	if *notify != "" {
+		if err := serveNotify(*notify, st.notes); err != nil {
+			log.Fatalf("--notify: %v", err)
 		}
 	}
 

@@ -93,6 +93,17 @@ struct alert_info {
     severity sev;
 };
 
+// A message from a script on the client's machine (kismet-crowpanel notify)
+enum class notify_level : uint8_t { info, warn, alert };
+
+struct notify_info {
+    uint32_t id;            // 0: none
+    notify_level level;
+    char title[48];
+    char text[160];
+    uint16_t secs;          // left to show; 0 until the next message
+};
+
 struct widget_state {
     link_state link;
     char message[64];
@@ -127,6 +138,8 @@ struct widget_state {
     uint32_t alerts_total;
     alert_info alerts[max_alerts];
     size_t alerts_n;
+
+    notify_info notify;
 };
 
 // Parse a state document; returns false and leaves out untouched on a
