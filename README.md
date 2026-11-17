@@ -43,18 +43,61 @@ Kismet out:
 ```sh
 (cd client && go build)        # -> client/kismet-crowpanel
 client/kismet-crowpanel --kismet http://localhost:2501 --apikey KEY --serial /dev/ttyUSB0
-client/kismet-crowpanel --demo --serial /dev/ttyUSB0   # synthetic data, no Kismet needed
+client/kismet-crowpanel --demo --serial auto           # synthetic data, no Kismet needed
 ```
 
-`--serial /dev/ttyUSB0` pushes the document to a panel on its USB-C port
-(921600 baud by default, `--baud` to change); the panel's own log output
-shows up in the client's log.  Nothing is served on the network unless
-asked: `--listen ADDR` (port 8235, `--port`) serves the state document at
-`/api/v1/state.json` for panels on Wi-Fi, and `--web` adds the browser viewer
-at `/`.  The panel asks for
-map tiles and sends consent over the same link (or over HTTP when it runs on
-Wi-Fi).  `--user`/`--password` work instead of an API key;
-`KISMET_APIKEY` and `KISMET_PASSWORD` are read from the environment.
+`--serial /dev/ttyUSB0` pushes the UI to a panel on its USB-C port,
+and `--serial auto` finds the panel itself (see below).  The panel's own log
+output shows up in the client's log.  Nothing is served on the network
+unless asked: `--listen ADDR` (port 8235, `--port`) serves the state document
+at `/api/v1/state.json` for panels on Wi-Fi, and `--web` adds the browser
+viewer at `/`.  The panel asks for map tiles and sends consent over the same
+link (or over HTTP when it runs on Wi-Fi).  `--user`/`--password` work
+instead of an API key.
+
+Settings can also come from the environment, which is how the service
+passes them; an option on the command line wins:
+
+| Variable | Option | |
+|---|---|---|
+| `KISMET_URL` | `--kismet` | Kismet server (default `http://localhost:2501`) |
+| `KISMET_APIKEY` | `--apikey` | Kismet API key |
+| `KISMET_USER` | `--user` | Kismet login, with `KISMET_PASSWORD` |
+| `KISMET_PASSWORD` | `--password` | Kismet password |
+| `CROWPANEL_SERIAL` | `--serial` | the panel's port, or `auto` |
+| `CROWPANEL_BAUD` | `--baud` | link rate to move the panel to (default 921600) |
+
+### Finding the panel
+
+The panel's firmware starts its link at 115200 baud and sends a hello every
+second until a client answers.  With `--serial auto` the client looks for
+that hello:
+
+- Only USB serial ports behind a panel's USB bridge are tried: the CH340
+  (`1a86:7523`) and the CH9102 (`1a86:55d4`), picked from the USB IDs in
+  sysfs on Linux, and from the port names (`cu.usbserial-*`,
+  `cu.wchusbserial*`) on macOS.  Nothing is opened to pick them.
+- Ports already in use are skipped: those with a UUCP lock file or a lock
+  (`/proc/locks`), those open in another program (`/proc/*/fd` on Linux,
+  `lsof` on macOS), and those another program holds exclusive, as gpsd does.
+  A program run as another user only shows up through its locks and
+  exclusive opens, so name the port if another CH340 device is attached.
+- A port that doesn't answer gets its line settings back and is tried less
+  often (up to once a minute) until it's replugged.
+- The panel's port is then held exclusive, so nothing else (ModemManager
+  probing, say) opens it.
+
+If a panel's bridge is on USB but has no serial port, the client says so: on
+Ubuntu that's brltty claiming the CH340; remove brltty, or mask its udev
+rule.
+
+Once the panel has said hello, the client asks it for `--baud` (921600 by
+default).  If the panel refuses or can't be heard at that rate, the client
+steps down (921600, 460800, 230400) and stays at 115200 if none works.
+Either side goes back to 115200 when the other goes quiet, so a restarted
+client or panel finds the other again within a few seconds.  On macOS the
+CH340 garbles 921600; the client steps down to 460800 by itself, or give
+`--baud 460800`.
 
 ## Map tiles
 
@@ -141,9 +184,27 @@ make && sudo make install                      # make install-web for --web
 sudo systemctl daemon-reload && sudo systemctl enable --now kismet-screen
 ```
 
-The service runs the client with the settings in
-`SYSCONFDIR/kismet-screen/kismet-screen.conf` (Kismet URL, login, panel
-port), as a locked-down dynamic user in the `dialout` group.
+The service runs the client as a locked-down dynamic user in the `dialout`
+group (`uucp` on Arch), with its settings in
+`SYSCONFDIR/kismet-screen/kismet-screen.conf`.  The file is mode 0600 since
+it holds the Kismet login, and `make install` never replaces it.  Every
+setting is a variable:
+
+```sh
+KISMET_URL=http://localhost:2501
+KISMET_APIKEY=                    # an API key, or
+KISMET_USER=kismet                # a user and password
+KISMET_PASSWORD=secret
+CROWPANEL_SERIAL=auto             # or /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+CROWPANEL_BAUD=921600
+KISMET_SCREEN_ARGS="--listen 127.0.0.1 --web"   # any other options
+```
+
+A `/dev/serial/by-id/` path names the panel's port in a way that survives
+replugs, and is the safe choice when other CH340 devices are attached (see
+"Finding the panel").  Restart the service after changing the file:
+`sudo systemctl restart kismet-screen`, and `journalctl -u kismet-screen`
+shows its log, the panel's log lines included.
 
 `make install` also puts the prebuilt panel firmware in
 `DATADIR/kismet-crowpanel/firmware`, where `kismet-crowpanel flash` looks
@@ -153,7 +214,7 @@ first; packages that build with plain `go build` should install it in
 ## Firmware
 
 Prebuilt images for both boards are in `firmware/prebuilt/` (USB serial
-link at 921600 baud).  The client flashes them itself, no PlatformIO or
+link, starting at 115200 baud).  The client flashes them itself, no PlatformIO or
 esptool needed:
 
 ```sh
@@ -162,8 +223,8 @@ client/kismet-crowpanel flash --port /dev/ttyUSB0 --board crowpanel5   # first i
 ```
 
 With no `--board` it restarts the panel and asks the firmware already on it
-which board it is (trying the link at 921600, then 460800 baud, or
-`--link-baud`).  That needs this project's firmware; the first time, over
+which board it is (trying the link at 115200, then the 921600 and 460800
+of older firmware, or `--link-baud`).  That needs this project's firmware; the first time, over
 Elecrow's demo, give `--board crowpanel7` or `--board crowpanel5`.
 `--dry-run` shows what it would flash.
 
@@ -184,8 +245,8 @@ firmware/prebuild.sh        # the images in firmware/prebuilt
 
 Pins and panel timings follow Elecrow's examples for each board.  On v3.0
 boards the touch controller is reset through a PCA9557; the firmware detects
-that at startup.  On macOS the CH340 USB bridge garbles 921600 baud: build
-with `serial_baud = 460800` and run the client with `--baud 460800`.
+that at startup.  On macOS the CH340 USB bridge garbles 921600 baud; run
+the client with `--baud 460800`.
 
 
 ## License

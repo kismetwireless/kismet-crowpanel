@@ -49,9 +49,11 @@ func main() {
 		}
 	}
 
-	kismetURL := flag.String("kismet", "http://localhost:2501", "Kismet server URL")
+	// the systemd unit's settings come in as environment variables
+	kismetURL := flag.String("kismet", firstOf(os.Getenv("KISMET_URL"), "http://localhost:2501"),
+		"Kismet server URL (or $KISMET_URL)")
 	apikey := flag.String("apikey", os.Getenv("KISMET_APIKEY"), "Kismet API key (or $KISMET_APIKEY)")
-	user := flag.String("user", "", "Kismet username, if not using an API key")
+	user := flag.String("user", os.Getenv("KISMET_USER"), "Kismet username, if not using an API key (or $KISMET_USER)")
 	password := flag.String("password", os.Getenv("KISMET_PASSWORD"), "Kismet password (or $KISMET_PASSWORD)")
 	name := flag.String("name", "", "server name to show when Kismet doesn't report one")
 	listen := flag.String("listen", "", "serve HTTP on this address, for Wi-Fi panels and --web (off by default)")
@@ -60,7 +62,8 @@ func main() {
 	web := flag.Bool("web", false, "also serve the browser viewer (the API for Wi-Fi panels is always served)")
 	webDir := flag.String("web-dir", webDefault, "directory with the built web viewer, with --web")
 	demo := flag.Bool("demo", false, "serve synthetic data instead of polling Kismet")
-	serial := flag.String("serial", "", "push state to a panel on this serial `port`")
+	serial := flag.String("serial", os.Getenv("CROWPANEL_SERIAL"),
+		"push state to a panel on this serial `port`, or \"auto\" to find it on a CH340 USB port (or $CROWPANEL_SERIAL)")
 	cacheDir := flag.String("cache-dir", filepath.Join(cacheHome, "kismet-crowpanel"),
 		"map tile cache and consent")
 	tileCacheMB := flag.Int64("tile-cache-mb", 500, "map tile cache size cap")
@@ -68,7 +71,12 @@ func main() {
 	demoMapURL := flag.String("demo-map-url", "",
 		"with --demo: tile URL template standing in for Kismet's setting (default OSM)")
 	demoMapTiles := flag.String("demo-map-tiles", "ask", "with --demo: Kismet's httpd_map_tiles stand-in (ask|deny)")
-	baud := flag.Int("baud", 921600, "serial baud rate (match the firmware)")
+	baudDefault, err := envInt("CROWPANEL_BAUD", 921600)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	baud := flag.Int("baud", baudDefault, "serial link rate to move the panel to from its starting 115200, or\n"+
+		"the fastest slower one that works (or $CROWPANEL_BAUD)")
 	flag.BoolVar(&verbose, "v", false, "verbose logging")
 	flag.BoolVar(&verbose, "verbose", false, "verbose logging")
 	flag.Usage = func() {
@@ -144,6 +152,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func envInt(name string, def int) (int, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("$%s: %q isn't a number", name, v)
+	}
+	return n, nil
 }
 
 func firstOf(a, b string) string {

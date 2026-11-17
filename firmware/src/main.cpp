@@ -53,11 +53,17 @@ constexpr size_t map_inbox_n = 6;
 constexpr uint32_t track_poll_ms = 5000;
 // Bring-up: report tile decode times (over serial they land in the client log)
 constexpr bool log_tile_ms = true;
+// hellos come faster until a client answers, so it finds the panel quickly
 constexpr uint32_t hello_ms = 5000;
+constexpr uint32_t hello_unlinked_ms = 1000;
 constexpr uint32_t serial_stale_ms = 3 * cfg::poll_ms + 2000;
+// after a rate change the client has this long to get a frame through
+constexpr uint32_t baud_confirm_ms = 3000;
+constexpr uint32_t link_bauds[] = {115200, 230400, 460800, 921600, 1500000, 2000000};
 
-// %s: the board, which "kismet-crowpanel flash" goes by
-constexpr const char *hello_fmt = "{\"v\":1,\"fw\":\"0.5\",\"w\":800,\"h\":480,\"map\":2,\"board\":\"%s\"}";
+// %s: the board, which "kismet-crowpanel flash" goes by; %u: the link rate
+constexpr const char *hello_fmt =
+    "{\"v\":1,\"fw\":\"0.6\",\"w\":800,\"h\":480,\"map\":2,\"board\":\"%s\",\"baud\":%u}";
 
 board::LGFX tft;
 
@@ -205,26 +211,48 @@ void send_consent(const char *url, bool allow) {
     }
 }
 
+// serial task only
+uint32_t link_rate = kw::link::link_baud;
+
 void send_hello() {
-    static char doc[96];
-    const int n = snprintf(doc, sizeof doc, hello_fmt, board::spec.name);
+    static char doc[112];
+    const int n = snprintf(doc, sizeof doc, hello_fmt, board::spec.name, static_cast<unsigned>(link_rate));
     const auto f = kw::link::encode(kw::link::frame_type::hello, reinterpret_cast<const uint8_t *>(doc), n);
     Serial.write(f.data(), f.size());
 }
 
-// The client pushes a state frame every poll interval, answers a hello
-// right away and a tile request when it has the tile; anything that isn't a
-// valid frame is ignored.
+void send_baud_reply(uint32_t rate) {
+    const uint8_t b[4] = {static_cast<uint8_t>(rate), static_cast<uint8_t>(rate >> 8),
+                          static_cast<uint8_t>(rate >> 16), static_cast<uint8_t>(rate >> 24)};
+    const auto f = kw::link::encode(kw::link::frame_type::baud, b, sizeof(b));
+    Serial.write(f.data(), f.size());
+}
+
+void set_link_rate(uint32_t rate) {
+    Serial.flush();
+    Serial.updateBaudRate(rate);
+    link_rate = rate;
+}
+
+// The panel starts at link_baud and hellos until the client answers.  The
+// client may then move the link to a faster rate; if nothing gets through at
+// that rate, or the client goes quiet later, the panel drops back to
+// link_baud so a client can find it again.  The client pushes a state frame
+// every poll interval, answers a hello right away and a tile request when
+// it has the tile; anything that isn't a valid frame is ignored.
 void serial_task(void *) {
     kw::link::decoder dec(max_frame_bytes);
     uint8_t chunk[256];
     uint32_t last_rx = millis();
+    uint32_t last_frame = millis();
     uint32_t last_hello = 0;
     bool stale = false;
+    bool linked = false;
+    bool rate_confirmed = true;
 
     for (;;) {
         const uint32_t now = millis();
-        if (now - last_hello >= hello_ms) {
+        if (now - last_hello >= (linked ? hello_ms : hello_unlinked_ms)) {
             send_hello();
             last_hello = now;
         }
@@ -234,6 +262,27 @@ void serial_task(void *) {
             const size_t n = Serial.readBytes(chunk, avail < static_cast<int>(sizeof(chunk))
                                                          ? static_cast<size_t>(avail) : sizeof(chunk));
             dec.feed(chunk, n, [&](kw::link::frame_type t, const uint8_t *d, size_t len) {
+                last_frame = millis();
+                // the client waits to hear from us at a new rate
+                if (!rate_confirmed) {
+                    rate_confirmed = true;
+                    send_hello();
+                    last_hello = millis();
+                }
+                if (t == kw::link::frame_type::baud) {
+                    const uint32_t want = len == 4 ? d[0] | d[1] << 8 | d[2] << 16 | static_cast<uint32_t>(d[3]) << 24 : 0;
+                    if (std::find(std::begin(link_bauds), std::end(link_bauds), want) == std::end(link_bauds)) {
+                        send_baud_reply(0);
+                        return;
+                    }
+                    send_baud_reply(want);
+                    set_link_rate(want);
+                    last_frame = millis();
+                    rate_confirmed = false;
+                    send_hello();
+                    last_hello = millis();
+                    return;
+                }
                 if (t == kw::link::frame_type::tile) {
                     kw::link::tile_reply r;
                     if (!kw::link::decode_tile_reply(d, len, r))
@@ -254,6 +303,7 @@ void serial_task(void *) {
                 post_body(std::string(reinterpret_cast<const char *>(d), len));
                 last_rx = millis();
                 stale = false;
+                linked = true;
             });
             avail = Serial.available();
         }
@@ -261,6 +311,20 @@ void serial_task(void *) {
         if (!stale && millis() - last_rx > serial_stale_ms) {
             post_link(kw::link_state::client_down, "serial: no data from client");
             stale = true;
+            linked = false;
+        }
+
+        const uint32_t quiet = millis() - last_frame;
+        if (link_rate != kw::link::link_baud &&
+            ((!rate_confirmed && quiet > baud_confirm_ms) || quiet > serial_stale_ms)) {
+            const uint32_t was = link_rate;
+            set_link_rate(kw::link::link_baud);
+            Serial.printf("link: nothing from the client at %u baud, back to %u\n", static_cast<unsigned>(was),
+                          static_cast<unsigned>(link_rate));
+            linked = false;
+            rate_confirmed = true;
+            send_hello();
+            last_hello = millis();
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -581,7 +645,7 @@ void *alloc_draw_buf() {
 void setup() {
     if constexpr (use_serial) {
         Serial.setRxBufferSize(16 * 1024);
-        Serial.begin(cfg::serial_baud);
+        Serial.begin(kw::link::link_baud);
     } else {
         Serial.begin(115200);
     }

@@ -5,15 +5,24 @@
 # Kismet server
 KISMET_URL=http://localhost:2501
 
-# Log in with an API key, or with a user (in KISMET_SCREEN_ARGS) and password
+# Log in with an API key, or with a user and password
 KISMET_APIKEY=
+KISMET_USER=
 KISMET_PASSWORD=
 
+# The panel's USB serial port, or auto to find it.  auto listens for the
+# panel on USB serial ports with a panel's bridge (CH340 or CH9102), skipping
+# ports in use: those with a lock file or lock, or held exclusive (as gpsd
+# does).  The service can't see which ports other users' programs merely
+# have open, so name the port if another CH340 device is attached.  A
+# /dev/serial/by-id/ path stays the same across replugs (ls /dev/serial/by-id/).
+CROWPANEL_SERIAL=auto
+
+# The panel's link starts at 115200 baud; the client moves it to this rate,
+# or to the fastest slower one that works
+CROWPANEL_BAUD=921600
+
 # Other options for kismet-crowpanel (see kismet-crowpanel -h):
-#   --user NAME        Kismet login, with KISMET_PASSWORD
-#   --serial PORT      the panel's serial port; a /dev/serial/by-id/ path stays
-#                      the same across replugs (ls /dev/serial/by-id/ to find it)
-#   --baud N           must match serial_baud in the firmware's widget_config.h
 #   --listen ADDR      serve HTTP for Wi-Fi panels and --web (off by default):
 #                      0.0.0.0 for the network, 127.0.0.1 for this machine only
 #   --port N           HTTP port (default 8235)
@@ -24,4 +33,4 @@ KISMET_PASSWORD=
 #   --no-map           don't offer map tiles
 #   --tile-cache-mb N  map tile cache cap (default 500)
 #   -v                 verbose logging
-KISMET_SCREEN_ARGS="--serial /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 --baud 921600"
+KISMET_SCREEN_ARGS=

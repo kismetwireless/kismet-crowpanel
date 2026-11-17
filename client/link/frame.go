@@ -21,13 +21,18 @@ const (
 	Consent
 	DetailReq
 	Detail
+	Baud
 )
+
+// LinkBaud is the rate the panel starts at; a Baud frame (rate u32) asks it
+// for another, and it answers with the rate it is switching to, or 0.
+const LinkBaud = 115200
 
 const MaxPayload = 64 * 1024
 
 var magic = []byte("KW")
 
-func known(t uint8) bool { return t >= uint8(State) && t <= uint8(Detail) }
+func known(t uint8) bool { return t >= uint8(State) && t <= uint8(Baud) }
 
 func Encode(t Type, payload []byte) []byte {
 	b := make([]byte, 0, 11+len(payload))

@@ -32,7 +32,13 @@ enum class frame_type : uint8_t {
     consent = 0x08,  // panel -> PC: map tile consent, JSON {url, allow}
     detail_req = 0x09, // panel -> PC: device id u32
     detail = 0x0a,   // PC -> panel: device detail, JSON
+    baud = 0x0b,     // PC -> panel: switch to rate u32; panel -> PC: the rate
+                     // it is switching to, or 0 for no, sent at the old rate
 };
+
+// The panel starts at link_baud and hellos until a client answers; the
+// client then asks for a faster rate with a baud frame.
+inline constexpr uint32_t link_baud = 115200;
 
 namespace detail {
 
@@ -62,7 +68,7 @@ constexpr uint32_t crc32(const uint8_t *data, size_t len, uint32_t crc = 0) {
 std::vector<uint8_t> encode(frame_type type, const uint8_t *payload, size_t len);
 
 constexpr bool known_type(uint8_t t) {
-    return t >= static_cast<uint8_t>(frame_type::state) && t <= static_cast<uint8_t>(frame_type::detail);
+    return t >= static_cast<uint8_t>(frame_type::state) && t <= static_cast<uint8_t>(frame_type::baud);
 }
 
 // Map tiles.  Request: flags u8 (1 night, 2 cached only, skin << 2), z u8,
