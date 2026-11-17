@@ -59,9 +59,9 @@ const (
 
 var flashBoards = []string{"crowpanel7", "crowpanel5"}
 
-// link speeds to look for running firmware at: the default, then the one
-// macOS needs
-var detectBauds = []int{921600, 460800}
+// link speeds to look for running firmware at: the one it starts at, then
+// the fixed rates of firmware before 0.6
+var detectBauds = []int{115200, 921600, 460800}
 
 var bootBoardLine = regexp.MustCompile(`board: (\w+)`)
 
@@ -430,7 +430,7 @@ func flashMain(args []string) int {
 	port := fs.String("port", "", "the panel's serial `port` (/dev/ttyUSB0, /dev/cu.usbserial-*)")
 	board := fs.String("board", "", "board, for its prebuilt image: crowpanel7 (7.0\") or crowpanel5 (5.0\");\n"+
 		"found from the firmware already on the panel when not given")
-	linkBaud := fs.Int("link-baud", 0, "the running firmware's link speed, for finding the board (default: try 921600, then 460800)")
+	linkBaud := fs.Int("link-baud", 0, "the running firmware's link speed, for finding the board (default: try 115200, 921600, then 460800)")
 	imagePath := fs.String("image", "", "flash this image `file` instead of the board's prebuilt one")
 	addr := fs.Uint("address", 0, "flash address (0 for a merged image, 0x10000 for an app alone)")
 	baud := fs.Int("baud", 460800, "baud rate while flashing (the ROM starts at 115200)")

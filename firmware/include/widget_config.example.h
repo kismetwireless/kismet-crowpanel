@@ -9,9 +9,9 @@ namespace cfg {
 enum class transport : uint8_t { wifi, serial };
 
 // serial: the client pushes state over the board's USB-C port (run it with
-// --serial).  wifi: poll state_url (run the client with --listen).
+// --serial); the link starts at 115200 baud and the client sets the rate.
+// wifi: poll state_url (run the client with --listen).
 inline constexpr transport link = transport::serial;
-inline constexpr uint32_t serial_baud = 921600;
 
 // wifi only
 inline constexpr const char *wifi_ssid = "your-ssid";

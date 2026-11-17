@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build the release images in firmware/prebuilt: one per board, with the
-# example config (USB serial link at 921600 baud), not widget_config.h.  Each
-# is a merged image (bootloader, partitions, app) to flash at 0:
+# example config (USB serial link; the client sets its rate), not
+# widget_config.h.  Each is a merged image (bootloader, partitions, app) to
+# flash at 0:
 #
 #   esptool.py --chip esp32s3 --port PORT write_flash 0 firmware/prebuilt/crowpanel7.bin
 #

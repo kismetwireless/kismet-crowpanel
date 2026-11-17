@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -21,14 +27,20 @@ func ioctl(fd uintptr, req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-// openSerial opens a port raw, 8N1, no hangup on close.  The fd is
+// openPort opens a port without changing its settings.  The fd is
 // non-blocking, so reads and writes go through Go's poller and take
 // deadlines.  Use the /dev/cu.* node, not /dev/tty.*, which waits for DCD.
+func openPort(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDWR|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0)
+}
+
+// openSerial opens a port raw, 8N1, no hangup on close, and exclusive, so
+// nothing else opens it while we have it.
 func openSerial(path string, baud int) (*os.File, error) {
 	if !baudOK(baud) {
 		return nil, fmt.Errorf("unsupported baud rate %d", baud)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0)
+	f, err := openPort(path)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +48,34 @@ func openSerial(path string, baud int) (*os.File, error) {
 		f.Close()
 		return nil, err
 	}
+	setExclusive(f)
 	return f, nil
+}
+
+func fdIoctl(f *os.File, req uintptr, arg unsafe.Pointer) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	if cerr := rc.Control(func(fd uintptr) { err = ioctl(fd, req, arg) }); cerr != nil {
+		return cerr
+	}
+	return err
+}
+
+func setExclusive(f *os.File) error { return fdIoctl(f, syscall.TIOCEXCL, nil) }
+
+// macOS can't ask; opening a port another program holds exclusive fails
+// with EBUSY instead
+func portExclusive(*os.File) bool { return false }
+
+func getTermios(f *os.File) (*syscall.Termios, error) {
+	var t syscall.Termios
+	return &t, fdIoctl(f, syscall.TIOCGETA, unsafe.Pointer(&t))
+}
+
+func setTermios(f *os.File, t *syscall.Termios) error {
+	return fdIoctl(f, syscall.TIOCSETA, unsafe.Pointer(t))
 }
 
 // setBaud puts an open port in raw 8N1 at baud and flushes it.
@@ -81,3 +120,55 @@ func setBaud(f *os.File, baud int) error {
 	}
 	return err
 }
+
+// drainSerial waits until everything written to the port has gone out
+func drainSerial(f *os.File) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	cerr := rc.Control(func(fd uintptr) {
+		// a pty has nothing to drain
+		if e := ioctl(fd, syscall.TIOCDRAIN, nil); e != nil && !errors.Is(e, syscall.ENOTTY) {
+			err = e
+		}
+	})
+	if err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// panelPorts lists the USB serial ports a CH340 shows up as: Apple's driver
+// names it usbserial-*, WCH's wchusbserial*
+func panelPorts() []string {
+	var out []string
+	for _, g := range []string{"/dev/cu.wchusbserial*", "/dev/cu.usbserial-*"} {
+		m, _ := filepath.Glob(g)
+		out = append(out, m...)
+	}
+	return out
+}
+
+// portInUse names a program that has the port open, from lsof, or is "".
+// Without root lsof only sees this user's programs.
+func portInUse(path string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "/usr/sbin/lsof", "-w", "-Fpc", "--", path).Output()
+	pid, name := "", ""
+	for _, ln := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(ln, "p"):
+			pid, name = ln[1:], ""
+		case strings.HasPrefix(ln, "c"):
+			name = ln[1:]
+		}
+		if pid != "" && name != "" && pid != strconv.Itoa(os.Getpid()) {
+			return name + "[" + pid + "]"
+		}
+	}
+	return ""
+}
+
+func bridgeHint() string { return "" }
