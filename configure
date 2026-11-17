@@ -24,7 +24,7 @@ Installation directories:
   --bindir=DIR             the helper binary [EPREFIX/bin]
   --datarootdir=DIR        read-only data root [PREFIX/share]
   --datadir=DIR            firmware and web viewer, under DIR/kismet-crowpanel [DATAROOTDIR]
-  --sysconfdir=DIR         the config, under DIR/kismet-screen [PREFIX/etc]
+  --sysconfdir=DIR         the config, under DIR/kismet-crowpanel [PREFIX/etc]
   --with-systemdunitdir=DIR
                            the systemd service [PREFIX/lib/systemd/system]
 
@@ -112,16 +112,16 @@ subst() {
 }
 
 subst Makefile
-subst packaging/systemd/kismet-screen.service
-subst packaging/systemd/kismet-screen.conf
+subst packaging/systemd/kismet-crowpanel.service
+subst packaging/systemd/kismet-crowpanel.conf
 
 cat <<SUMMARY
 
   helper binary   $bindir/kismet-crowpanel
   panel firmware  $datadir/kismet-crowpanel/firmware
   web viewer      $datadir/kismet-crowpanel/web (make install-web)
-  config          $sysconfdir/kismet-screen/kismet-screen.conf
-  systemd unit    $systemdunitdir/kismet-screen.service
+  config          $sysconfdir/kismet-crowpanel/kismet-crowpanel.conf
+  systemd unit    $systemdunitdir/kismet-crowpanel.service
 
 Now run make, then make install.
 SUMMARY

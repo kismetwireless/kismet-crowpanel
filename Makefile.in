@@ -12,8 +12,8 @@ INSTALL = install
 CLIENT = client/kismet-crowpanel
 PKGDATA = $(datadir)/kismet-crowpanel
 FIRMWARE = firmware/prebuilt/crowpanel7.bin firmware/prebuilt/crowpanel5.bin firmware/prebuilt/SHA256SUMS
-UNIT = packaging/systemd/kismet-screen.service
-CONF = packaging/systemd/kismet-screen.conf
+UNIT = packaging/systemd/kismet-crowpanel.service
+CONF = packaging/systemd/kismet-crowpanel.conf
 
 all: configured $(CLIENT)
 
@@ -29,17 +29,17 @@ configured:
 	done
 
 install: all
-	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(systemdunitdir) $(DESTDIR)$(sysconfdir)/kismet-screen \
+	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(systemdunitdir) $(DESTDIR)$(sysconfdir)/kismet-crowpanel \
 		$(DESTDIR)$(PKGDATA)/firmware
 	$(INSTALL) -m 0755 $(CLIENT) $(DESTDIR)$(bindir)/kismet-crowpanel
 	$(INSTALL) -m 0644 $(FIRMWARE) $(DESTDIR)$(PKGDATA)/firmware/
-	$(INSTALL) -m 0644 $(UNIT) $(DESTDIR)$(systemdunitdir)/kismet-screen.service
+	$(INSTALL) -m 0644 $(UNIT) $(DESTDIR)$(systemdunitdir)/kismet-crowpanel.service
 	@# never replace a config that may hold credentials
-	@if [ -e $(DESTDIR)$(sysconfdir)/kismet-screen/kismet-screen.conf ]; then \
-		echo "keeping $(DESTDIR)$(sysconfdir)/kismet-screen/kismet-screen.conf"; \
+	@if [ -e $(DESTDIR)$(sysconfdir)/kismet-crowpanel/kismet-crowpanel.conf ]; then \
+		echo "keeping $(DESTDIR)$(sysconfdir)/kismet-crowpanel/kismet-crowpanel.conf"; \
 	else \
-		echo "$(INSTALL) -m 0600 $(CONF) $(DESTDIR)$(sysconfdir)/kismet-screen/kismet-screen.conf"; \
-		$(INSTALL) -m 0600 $(CONF) $(DESTDIR)$(sysconfdir)/kismet-screen/kismet-screen.conf; \
+		echo "$(INSTALL) -m 0600 $(CONF) $(DESTDIR)$(sysconfdir)/kismet-crowpanel/kismet-crowpanel.conf"; \
+		$(INSTALL) -m 0600 $(CONF) $(DESTDIR)$(sysconfdir)/kismet-crowpanel/kismet-crowpanel.conf; \
 	fi
 
 # the web viewer, for --web; build it first with web/build.sh
@@ -50,7 +50,7 @@ install-web:
 
 # leaves the config, which may hold credentials
 uninstall:
-	rm -f $(DESTDIR)$(bindir)/kismet-crowpanel $(DESTDIR)$(systemdunitdir)/kismet-screen.service
+	rm -f $(DESTDIR)$(bindir)/kismet-crowpanel $(DESTDIR)$(systemdunitdir)/kismet-crowpanel.service
 	rm -f $(DESTDIR)$(PKGDATA)/web/index.html $(DESTDIR)$(PKGDATA)/web/widget.js $(DESTDIR)$(PKGDATA)/web/widget.wasm
 	rm -f $(DESTDIR)$(PKGDATA)/firmware/crowpanel7.bin $(DESTDIR)$(PKGDATA)/firmware/crowpanel5.bin \
 		$(DESTDIR)$(PKGDATA)/firmware/SHA256SUMS
