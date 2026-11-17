@@ -6,5 +6,5 @@ firmware/include/widget_config.h
 __pycache__/
 client/kismet-crowpanel
 /Makefile
-/packaging/systemd/kismet-screen.service
-/packaging/systemd/kismet-screen.conf
+/packaging/systemd/kismet-crowpanel.service
+/packaging/systemd/kismet-crowpanel.conf

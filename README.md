@@ -183,12 +183,12 @@ devices, etc).
 ```sh
 ./configure --prefix=/usr --sysconfdir=/etc    # usual autoconf-style paths
 make && sudo make install                      # make install-web for --web
-sudo systemctl daemon-reload && sudo systemctl enable --now kismet-screen
+sudo systemctl daemon-reload && sudo systemctl enable --now kismet-crowpanel
 ```
 
 The service runs the client as a locked-down dynamic user in the `dialout`
 group (`uucp` on Arch), with its settings in
-`SYSCONFDIR/kismet-screen/kismet-screen.conf`.  The file is mode 0600 since
+`SYSCONFDIR/kismet-crowpanel/kismet-crowpanel.conf`.  The file is mode 0600 since
 it holds the Kismet login, and `make install` never replaces it.  Every
 setting is a variable:
 
@@ -199,13 +199,13 @@ KISMET_USER=kismet                # a user and password
 KISMET_PASSWORD=secret
 CROWPANEL_SERIAL=auto             # or /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
 CROWPANEL_BAUD=auto               # or a rate, as --baud
-KISMET_SCREEN_ARGS="--listen 127.0.0.1 --web"   # any other options
+CROWPANEL_ARGS="--listen 127.0.0.1 --web"   # any other options
 ```
 
 A `/dev/serial/by-id/` path names the panel's port in a way that survives
 replugs, and is the safe choice when other CH340 devices are attached (see
 "Finding the panel").  Restart the service after changing the file:
-`sudo systemctl restart kismet-screen`, and `journalctl -u kismet-screen`
+`sudo systemctl restart kismet-crowpanel`, and `journalctl -u kismet-crowpanel`
 shows its log, the panel's log lines included.
 
 `make install` also puts the prebuilt panel firmware in
