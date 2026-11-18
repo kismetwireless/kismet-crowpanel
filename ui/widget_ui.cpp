@@ -1661,6 +1661,9 @@ void build_dashboard(lv_obj_t *p) {
     auto &d = ui.dash;
     static constexpr const char *titles[] = {"Active", "New", "Devices", "Packets/s", "GPS", "Alerts"};
     static constexpr const char *subs[] = {"last 60s", "last 5 min", "total", "", "", "total"};
+    // a tap on a card opens the page with more of it
+    static constexpr page opens[] = {page::devices, page::devices, page::devices,
+                                     page::sources, page::map,     page::alerts};
     constexpr int32_t tw = (inner_w - 2 * pad) / 3;
     constexpr int32_t th = 132;
 
@@ -1668,6 +1671,10 @@ void build_dashboard(lv_obj_t *p) {
         const int32_t x = static_cast<int32_t>(i % 3) * (tw + pad);
         const int32_t y = static_cast<int32_t>(i / 3) * (th + pad);
         lv_obj_t *t = make_panel(p, x, y, tw, th);
+        lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+        bind(t, prop::bg, role::panel_hi, LV_STATE_PRESSED);
+        lv_obj_add_event_cb(t, on_nav, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(opens[i])));
         auto &tl = d.tiles[i];
         tl.title = make_label(t, &lv_font_montserrat_14, role::muted, titles[i]);
         lv_obj_align(tl.title, LV_ALIGN_TOP_LEFT, 0, 0);
