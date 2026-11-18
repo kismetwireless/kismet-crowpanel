@@ -542,10 +542,13 @@ uint8_t touch_reset() {
     return addr;
 }
 
+// The panel's framebuffer holds RGB565 byte-swapped: swapped here, a strip
+// goes in with a plain copy instead of LovyanGFX converting each pixel
 void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
     const int32_t w = lv_area_get_width(area);
     const int32_t h = lv_area_get_height(area);
-    tft.pushImage(area->x1, area->y1, w, h, reinterpret_cast<lgfx::rgb565_t *>(px_map));
+    lv_draw_sw_rgb565_swap(px_map, static_cast<uint32_t>(w * h));
+    tft.pushImage(area->x1, area->y1, w, h, reinterpret_cast<lgfx::swap565_t *>(px_map));
     lv_display_flush_ready(disp);
 }
 
