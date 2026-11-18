@@ -81,10 +81,11 @@
       pollTrack();
     },
     // Tiles come from the same client as the state document
-    kwTile(z, x, y, skin, cached) {
+    kwTile(z, x, y, skin, rot, cached) {
       const skins = ['classic', 'amber', 'ocean', 'sunlight', 'red', 'cyberpunk'];
-      const url = new URL(`tiles/${skins[skin] ?? 'classic'}/${z}/${x}/${y}.png${cached ? '?cached=1' : ''}`,
-                          apiBase());
+      const url = new URL(`tiles/${skins[skin] ?? 'classic'}/${z}/${x}/${y}.png`, apiBase());
+      if (rot) url.searchParams.set('rot', rot);
+      if (cached) url.searchParams.set('cached', '1');
       fetch(url).then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.arrayBuffer();
@@ -92,9 +93,9 @@
         const bytes = new Uint8Array(ab);
         const p = Module._malloc(bytes.length);
         Module.HEAPU8.set(bytes, p);
-        Module._widget_tile(z, x, y, skin, p, bytes.length);
+        Module._widget_tile(z, x, y, skin, rot, p, bytes.length);
         Module._free(p);
-      }).catch(() => Module._widget_tile_failed(z, x, y, skin));
+      }).catch(() => Module._widget_tile_failed(z, x, y, skin, rot));
     },
     // Markers, track and device details are binary or JSON from the client,
     // handed to the UI as they are

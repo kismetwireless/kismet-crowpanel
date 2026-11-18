@@ -278,17 +278,23 @@ func MakeVariant(data []byte, skin int) ([]byte, error) {
 		im = quantize(im.w, im.h, im.pixels(), PanelColors)
 	}
 
+	idx := make([]uint8, tilePx*tilePx)
+	for y := 0; y < tilePx; y++ {
+		sy := y * im.h / tilePx
+		for x := 0; x < tilePx; x++ {
+			idx[y*tilePx+x] = im.idx[sy*im.w+x*im.w/tilePx]
+		}
+	}
+	return panelPNG(indexed{tilePx, tilePx, im.pal, idx})
+}
+
+// panelPNG encodes a 256x256 tile with its colours snapped to RGB565
+func panelPNG(im indexed) ([]byte, error) {
 	pal := make(color.Palette, len(im.pal))
 	for i, c := range im.pal {
 		pal[i] = color.RGBA{to565(c.r, 5), to565(c.g, 6), to565(c.b, 5), 0xff}
 	}
-	out := image.NewPaletted(image.Rect(0, 0, tilePx, tilePx), pal)
-	for y := 0; y < tilePx; y++ {
-		sy := y * im.h / tilePx
-		for x := 0; x < tilePx; x++ {
-			out.Pix[y*out.Stride+x] = im.idx[sy*im.w+x*im.w/tilePx]
-		}
-	}
+	out := &image.Paletted{Pix: im.idx, Stride: tilePx, Rect: image.Rect(0, 0, tilePx, tilePx), Palette: pal}
 	var buf bytes.Buffer
 	enc := png.Encoder{CompressionLevel: png.BestCompression}
 	if err := enc.Encode(&buf, out); err != nil {

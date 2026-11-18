@@ -189,14 +189,16 @@ int run_tiles() {
     static uint16_t next_id = 100;
     static size_t outstanding = 0, max_outstanding = 0;
     map_on_tile_request([](const tile_key &k, bool) {
-        send_tile_req({k.skin, k.z, k.x, k.y, next_id++});
+        send_tile_req({k.skin, k.z, k.x, k.y, next_id++, false, k.rot});
         outstanding++;
         if (outstanding > max_outstanding)
             max_outstanding = outstanding;
     });
     const tile_key keys[] = {
-        {1, 1, 2, false}, {2, 1, 2, false}, {1, 2, 2, false}, {1, 1, 2, true},
-        {3, 2, 3, false}, {3, 2, 3, true}, {4, 2, 3, false},
+        {1, 1, 2, 0, 0}, {2, 1, 2, 0, 0}, {1, 2, 2, 0, 0}, {1, 1, 2, 1, 0},
+        {3, 2, 3, 0, 0}, {3, 2, 3, 1, 0}, {4, 2, 3, 0, 0},
+        // turned, for a heading-up map
+        {21, 13, 3, 0, 9}, {21, 13, 3, 1, 9}, {20, 13, 3, 0, 27},
     };
     constexpr size_t nkeys = sizeof(keys) / sizeof(keys[0]);
     map_want(keys, nkeys, lv_tick_get());
@@ -207,7 +209,7 @@ int run_tiles() {
         if (t != kl::frame_type::tile || !kl::decode_tile_reply(d, len, r))
             return false;
         outstanding--;
-        const tile_key k{r.req.x, r.req.y, r.req.z, r.req.skin};
+        const tile_key k{r.req.x, r.req.y, r.req.z, r.req.skin, r.req.rot};
         if (r.status == kl::tile_status::ok) {
             map_tile_arrived(k, r.png, r.png_len);
             decoded += map_tile(k) != nullptr;

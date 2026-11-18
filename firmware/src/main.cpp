@@ -155,7 +155,7 @@ std::string consent_json(const char *url, bool allow) {
 void request_tile(const kw::tile_key &k, bool prefetch) {
     static uint16_t next_id;
     if constexpr (use_serial) {
-        const auto p = kw::link::encode_tile_request({k.skin, k.z, k.x, k.y, next_id++, prefetch});
+        const auto p = kw::link::encode_tile_request({k.skin, k.z, k.x, k.y, next_id++, prefetch, k.rot});
         const auto f = kw::link::encode(kw::link::frame_type::tile_req, p.data(), p.size());
         Serial.write(f.data(), f.size());
     } else {
@@ -287,7 +287,7 @@ void serial_task(void *) {
                     kw::link::tile_reply r;
                     if (!kw::link::decode_tile_reply(d, len, r))
                         return;
-                    tile_msg m{{r.req.x, r.req.y, r.req.z, r.req.skin}, r.status == kw::link::tile_status::ok, {}};
+                    tile_msg m{{r.req.x, r.req.y, r.req.z, r.req.skin, r.req.rot}, r.status == kw::link::tile_status::ok, {}};
                     if (m.ok)
                         m.png.assign(r.png, r.png + r.png_len);
                     post_tile(std::move(m));
@@ -369,10 +369,13 @@ bool http_get_bytes(HTTPClient &http, const std::string &url, std::vector<uint8_
 
 void fetch_tile(HTTPClient &http, const std::string &base, const tile_job &j) {
     const kw::tile_key &k = j.key;
-    char path[80];
-    snprintf(path, sizeof(path), "tiles/%s/%u/%u/%u.png%s", kw::skin_name(k.skin),
-             static_cast<unsigned>(k.z), static_cast<unsigned>(k.x), static_cast<unsigned>(k.y),
-             j.prefetch ? "?cached=1" : "");
+    char path[96];
+    int n = snprintf(path, sizeof(path), "tiles/%s/%u/%u/%u.png", kw::skin_name(k.skin),
+                     static_cast<unsigned>(k.z), static_cast<unsigned>(k.x), static_cast<unsigned>(k.y));
+    if (k.rot != 0)
+        n += snprintf(path + n, sizeof(path) - n, "?rot=%u", static_cast<unsigned>(k.rot));
+    if (j.prefetch)
+        snprintf(path + n, sizeof(path) - n, "%ccached=1", k.rot != 0 ? '&' : '?');
     tile_msg m{k, false, {}};
     m.ok = http_get_bytes(http, base + path, m.png);
     if (!m.ok)

@@ -52,4 +52,14 @@ func TestTileFrames(t *testing.T) {
 	if len(rep) != 13 || rep[2] != byte(TileNotFound) || rep[3] != 0 {
 		t.Errorf("the reply names the request's skin: % x", rep)
 	}
+
+	// a turned tile: rot after the request, flagged and echoed in the reply
+	r, ok = DecodeTileRequest([]byte{0, 5, 1, 0, 0, 0, 2, 0, 0, 0, 9, 0, 7})
+	if !ok || r.Rot != 7 {
+		t.Fatalf("turned request: %+v", r)
+	}
+	rep = TileReply(r, TileOK, []byte("png"))
+	if len(rep) != 17 || rep[3] != replyTurned || rep[13] != 7 || string(rep[14:]) != "png" {
+		t.Errorf("turned reply: % x", rep)
+	}
 }

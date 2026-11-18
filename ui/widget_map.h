@@ -17,8 +17,9 @@ inline constexpr int32_t tile_px = 256;
 inline constexpr uint8_t map_min_zoom = 3;
 inline constexpr uint8_t map_max_zoom = 18;
 
-// Decoded tiles are RGB565, 128 KB each
-inline constexpr size_t tile_cache_n = 24;
+// Decoded tiles are RGB565, 128 KB each; room for a screenful at two
+// rotations while the map turns
+inline constexpr size_t tile_cache_n = 28;
 inline constexpr size_t max_tile_requests = 4;
 inline constexpr uint32_t tile_timeout_ms = 20000;
 inline constexpr uint32_t tile_retry_ms = 15000;
@@ -32,19 +33,35 @@ constexpr const char *skin_name(uint8_t skin) {
     return skin < skin_n ? skin_names[skin] : skin_names[0];
 }
 
+// Heading-up maps: the client renders tiles turned by rot steps of
+// 360 / rot_steps degrees clockwise.  A turned tile's x and y index the
+// 256 px grid of the world turned about its origin (map_rotate), plus
+// rot_offset so they stay positive.  rot 0 is the plain tile.
+inline constexpr uint8_t rot_steps = 36;
+
+constexpr int64_t rot_offset(uint8_t z) {
+    return int64_t{2} << z;
+}
+
 struct tile_key {
     uint32_t x, y;
     uint8_t z;
     uint8_t skin;
+    uint8_t rot;    // left out of an initializer, 0
 };
 
 constexpr bool operator==(const tile_key &a, const tile_key &b) {
-    return a.x == b.x && a.y == b.y && a.z == b.z && a.skin == b.skin;
+    return a.x == b.x && a.y == b.y && a.z == b.z && a.skin == b.skin && a.rot == b.rot;
 }
 
 struct world_px {
     double x, y;
 };
+
+// World px into the frame turned by rot steps, where up is that heading,
+// and back
+world_px map_rotate(world_px p, uint8_t rot);
+world_px map_unrotate(world_px p, uint8_t rot);
 
 // World pixel coordinates at zoom z, 256 px tiles
 world_px map_project(double lat, double lon, uint8_t z);

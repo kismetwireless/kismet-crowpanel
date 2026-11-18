@@ -129,6 +129,38 @@ world_px map_project(double lat, double lon, uint8_t z) {
             (0.5 - std::log((1 + s) / (1 - s)) / (4 * pi)) * scale};
 }
 
+namespace {
+
+struct trig {
+    double c, s;
+};
+
+const trig &rot_trig(uint8_t rot) {
+    static const auto table = [] {
+        std::array<trig, rot_steps> t{};
+        for (size_t i = 0; i < t.size(); i++)
+            t[i] = {std::cos(2 * pi * i / rot_steps), std::sin(2 * pi * i / rot_steps)};
+        return t;
+    }();
+    return table[rot % rot_steps];
+}
+
+}
+
+world_px map_rotate(world_px p, uint8_t rot) {
+    if (rot == 0)
+        return p;
+    const trig &t = rot_trig(rot);
+    return {t.c * p.x + t.s * p.y, t.c * p.y - t.s * p.x};
+}
+
+world_px map_unrotate(world_px p, uint8_t rot) {
+    if (rot == 0)
+        return p;
+    const trig &t = rot_trig(rot);
+    return {t.c * p.x - t.s * p.y, t.s * p.x + t.c * p.y};
+}
+
 double map_m_per_px(double lat, uint8_t z) {
     return earth_m_per_px_z0 * std::cos(lat * pi / 180.0) / static_cast<double>(1u << z);
 }
