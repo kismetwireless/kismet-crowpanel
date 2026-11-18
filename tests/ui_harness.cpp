@@ -4,7 +4,8 @@
 // as kw-fixture writes them), and plays a script of touches,
 // writing frames as PPM.
 //
-// Script lines: "tap X Y", "drag X0 Y0 X1 Y1", "wait MS", "page N",
+// Script lines: "tap X Y", "drag X0 Y0 X1 Y1", "press X Y", "move X Y",
+// "release" (a drag in steps, to look at the screen mid-way), "wait MS", "page N",
 // "theme N", "shot FILE", "state FILE", and "markers FILE", "track FILE",
 // "detail FILE" to feed what the client would send; "wheel X Y STEPS",
 // "pinch X Y SCALE" (two fingers spreading to SCALE), "smooth MS",
@@ -187,6 +188,17 @@ int main(int argc, char **argv) {
             step(40);
             for (int i = 1; i <= 10; i++)
                 move_to(a + (c - a) * i / 10, b + (d - b) * i / 10);
+            pdown = false;
+            step(40);
+        } else if (sscanf(line, "press %d %d", &a, &b) == 2) {
+            move_to(a, b);
+            pdown = true;
+            step(40);
+        } else if (sscanf(line, "move %d %d", &a, &b) == 2) {
+            const int32_t x0 = px, y0 = py;
+            for (int i = 1; i <= 10; i++)
+                move_to(x0 + (a - x0) * i / 10, y0 + (b - y0) * i / 10);
+        } else if (strncmp(line, "release", 7) == 0) {
             pdown = false;
             step(40);
         } else if (strncmp(line, "redrawn", 7) == 0) {

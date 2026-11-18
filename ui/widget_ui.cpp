@@ -780,6 +780,9 @@ lv_obj_t *make_page(lv_obj_t *content, bool scroll) {
     lv_obj_set_style_pad_all(p, pad, 0);
     if (!scroll)
         lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    // a list stops when the finger lifts: every scrolled frame is a full
+    // redraw, and coasting on would only add more of them
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
     return p;
 }
@@ -1736,6 +1739,29 @@ constexpr column dev_cols[] = {
     {"Ch", 484, 52}, {"Signal", 540, 120}, {"Seen", 664, 52},
 };
 
+// A list being scrolled isn't updated: an update mid-scroll would make
+// LVGL lay out and redraw it again on top of the scroll's own redraws.  The
+// latest state goes in when the scroll ends.
+lv_obj_t *scrolling;
+
+bool list_frozen(page p) {
+    return scrolling != nullptr && scrolling == ui.pages[static_cast<size_t>(p)];
+}
+
+void thaw_list() {
+    if (scrolling == nullptr)
+        return;
+    scrolling = nullptr;
+    if (have_last)
+        render(last);
+}
+
+void freeze_on_scroll(lv_obj_t *list) {
+    lv_obj_add_event_cb(list, [](lv_event_t *e) { scrolling = lv_event_get_target_obj(e); }, LV_EVENT_SCROLL_BEGIN,
+                        nullptr);
+    lv_obj_add_event_cb(list, [](lv_event_t *) { thaw_list(); }, LV_EVENT_SCROLL_END, nullptr);
+}
+
 void build_devices(lv_obj_t *p) {
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(p, 2, 0);
@@ -1769,6 +1795,7 @@ void build_devices(lv_obj_t *p) {
         set_visible(r.row, false);
     }
     ui.devs_empty = make_empty(p, "No devices seen yet");
+    freeze_on_scroll(p);
 }
 
 // One row per source: name and state, channel and packet count, then the
@@ -1807,6 +1834,7 @@ void build_sources(lv_obj_t *p) {
         set_visible(s.card, false);
     }
     ui.srcs_empty = make_empty(p, "No data sources");
+    freeze_on_scroll(p);
 }
 
 void build_alerts(lv_obj_t *p) {
@@ -1828,6 +1856,7 @@ void build_alerts(lv_obj_t *p) {
         set_visible(a.row, false);
     }
     ui.alerts_empty = make_empty(p, "No alerts");
+    freeze_on_scroll(p);
 }
 
 void render_status(const widget_state &s) {
@@ -2306,6 +2335,8 @@ void render_dashboard(const widget_state &s) {
 }
 
 void render_devices(const widget_state &s) {
+    if (list_frozen(page::devices))
+        return;
     char buf[16];
     for (size_t i = 0; i < max_devices; i++) {
         auto &r = ui.devs[i];
@@ -2335,6 +2366,8 @@ void render_devices(const widget_state &s) {
 }
 
 void render_sources(const widget_state &s) {
+    if (list_frozen(page::sources))
+        return;
     char pk[32], rate[16];
     for (size_t i = 0; i < max_sources; i++) {
         auto &card = ui.srcs[i];
@@ -2367,6 +2400,8 @@ void render_sources(const widget_state &s) {
 }
 
 void render_alerts(const widget_state &s) {
+    if (list_frozen(page::alerts))
+        return;
     for (size_t i = 0; i < max_alerts; i++) {
         auto &r = ui.alerts[i];
         const bool show = i < s.alerts_n;
@@ -2596,6 +2631,7 @@ void ui_show_page(page p) {
     const auto idx = static_cast<size_t>(p);
     if (idx >= static_cast<size_t>(page::count))
         return;
+    thaw_list();
     cur_page = p;
     for (size_t i = 0; i < static_cast<size_t>(page::count); i++) {
         const bool on = i == idx;
