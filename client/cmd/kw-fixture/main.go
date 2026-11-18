@@ -3,6 +3,9 @@
 //
 //	kw-fixture variant SKIN IN OUT [IN OUT ...]   (a skin name, or day|night)
 //	    panel tiles from source PNGs
+//	kw-fixture turned SKIN Z ROT LAT LON DIR
+//	    turned tiles (heading-up) round lat/lon from the panel tiles in
+//	    DIR/SKIN/Z/X/Y.png, written to DIR/SKIN/rROT/Z/X/Y.png
 //	kw-fixture markers SPEC OUTDIR
 //	    markers.bin, track.bin and detail.json from a JSON spec; prints the
 //	    detail device's id
@@ -19,6 +22,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"kismet-crowpanel/markers"
@@ -80,6 +84,49 @@ func variant(theme string, pairs []string) {
 	}
 }
 
+func turned(skin string, args []string) {
+	var z, rot int
+	var lat, lon float64
+	if _, err := fmt.Sscan(strings.Join(args[:4], " "), &z, &rot, &lat, &lon); err != nil {
+		fail("turned: %v", err)
+	}
+	dir, sk := args[4], tiles.SkinID(skin)
+	if sk < 0 {
+		fail("unknown skin %q", skin)
+	}
+	n := 1 << z
+	wx, wy := markers.WorldPx(lat, lon, z)
+	a := 2 * math.Pi * float64(rot) / tiles.RotSteps
+	rx, ry := math.Cos(a)*wx+math.Sin(a)*wy, math.Cos(a)*wy-math.Sin(a)*wx
+	off := 2 << z
+	cx, cy := int(math.Floor(rx/256))+off, int(math.Floor(ry/256))+off
+	made := 0
+	for y := cy - 4; y <= cy+4; y++ {
+		for x := cx - 4; x <= cx+4; x++ {
+			tx0, ty0, tx1, ty1 := tiles.TurnedSources(z, x, y, rot)
+			var pngs [][]byte
+			for ty := ty0; ty <= ty1; ty++ {
+				for tx := tx0; tx <= tx1; tx++ {
+					b, _ := os.ReadFile(filepath.Join(dir, skin, fmt.Sprint(z), fmt.Sprint(((tx%n)+n)%n),
+						fmt.Sprintf("%d.png", ty)))
+					pngs = append(pngs, b)
+				}
+			}
+			out, err := tiles.MakeTurned(z, x, y, rot, sk, pngs)
+			if err != nil {
+				fail("%d/%d/%d r%d: %v", z, x, y, rot, err)
+			}
+			p := filepath.Join(dir, skin, fmt.Sprintf("r%d", rot), fmt.Sprint(z), fmt.Sprint(x), fmt.Sprintf("%d.png", y))
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			if err := os.WriteFile(p, out, 0o644); err != nil {
+				fail("%v", err)
+			}
+			made++
+		}
+	}
+	fmt.Println(made)
+}
+
 func markerFiles(specPath, dir string) {
 	b, err := os.ReadFile(specPath)
 	if err != nil {
@@ -130,9 +177,11 @@ func main() {
 	switch {
 	case len(a) >= 2 && a[0] == "variant":
 		variant(a[1], a[2:])
+	case len(a) == 7 && a[0] == "turned":
+		turned(a[1], a[2:])
 	case len(a) == 3 && a[0] == "markers":
 		markerFiles(a[1], a[2])
 	default:
-		fail("usage: kw-fixture variant day|night IN OUT ... | markers SPEC OUTDIR")
+		fail("usage: kw-fixture variant day|night IN OUT ... | turned SKIN Z ROT LAT LON DIR | markers SPEC OUTDIR")
 	}
 }

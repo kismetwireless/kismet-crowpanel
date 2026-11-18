@@ -95,33 +95,41 @@ void decoder::feed_byte(uint8_t b, frame_cb cb, void *ctx) {
 
 namespace kw::link {
 
-std::array<uint8_t, tile_req_len> encode_tile_request(const tile_request &r) {
-    std::array<uint8_t, tile_req_len> b{};
+tile_request_bytes encode_tile_request(const tile_request &r) {
+    tile_request_bytes out{{}, r.rot != 0 ? tile_req_turned_len : tile_req_len};
+    auto &b = out.b;
     b[0] = static_cast<uint8_t>(r.skin << 2 | (r.skin == 1 ? 1 : 0) | (r.cached_only ? 2 : 0));
     b[1] = r.z;
     put_u32(&b[2], r.x);
     put_u32(&b[6], r.y);
     b[10] = static_cast<uint8_t>(r.id);
     b[11] = static_cast<uint8_t>(r.id >> 8);
-    return b;
+    b[12] = r.rot;
+    return out;
 }
 
 bool decode_tile_request(const uint8_t *d, size_t len, tile_request &out) {
-    if (len != tile_req_len)
+    if (len != tile_req_len && len != tile_req_turned_len)
         return false;
     const uint8_t skin = d[0] >> 2;
     out = {static_cast<uint8_t>(skin == 0 && (d[0] & 1) ? 1 : skin), d[1], get_u32(&d[2]), get_u32(&d[6]),
-           static_cast<uint16_t>(d[10] | d[11] << 8), (d[0] & 2) != 0};
+           static_cast<uint16_t>(d[10] | d[11] << 8), (d[0] & 2) != 0,
+           len == tile_req_turned_len ? d[12] : uint8_t{0}};
     return true;
 }
 
 bool decode_tile_reply(const uint8_t *d, size_t len, tile_reply &out) {
     if (len < tile_reply_head || d[2] > static_cast<uint8_t>(tile_status::failed))
         return false;
-    out.req = {d[3], d[4], get_u32(&d[5]), get_u32(&d[9]), static_cast<uint16_t>(d[0] | d[1] << 8)};
+    const bool turned = d[3] & tile_reply_turned;
+    const size_t head = turned ? tile_reply_head + 1 : tile_reply_head;
+    if (len < head)
+        return false;
+    out.req = {static_cast<uint8_t>(d[3] & ~tile_reply_turned), d[4], get_u32(&d[5]), get_u32(&d[9]),
+               static_cast<uint16_t>(d[0] | d[1] << 8), false, turned ? d[13] : uint8_t{0}};
     out.status = static_cast<tile_status>(d[2]);
-    out.png = d + tile_reply_head;
-    out.png_len = len - tile_reply_head;
+    out.png = d + head;
+    out.png_len = len - head;
     return out.status != tile_status::ok || out.png_len > 0;
 }
 

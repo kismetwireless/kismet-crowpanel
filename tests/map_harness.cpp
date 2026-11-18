@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
         pngs.push_back(d);
     }
 
-    const kw::tile_key first{0, 0, 1, false};
+    const kw::tile_key first{0, 0, 1, 0, 0};
     kw::map_tile_arrived(first, pngs[0].data(), pngs[0].size());
     if (!ready || kw::map_tile(first) == nullptr) {
         fprintf(stderr, "decode failed\n");
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
     // layout would, so it must survive
     for (size_t round = 0; round < 3; round++)
         for (size_t i = 1; i < pngs.size(); i++) {
-            const kw::tile_key k{static_cast<uint32_t>(i + round * pngs.size()), 0, 12, false};
+            const kw::tile_key k{static_cast<uint32_t>(i + round * pngs.size()), 0, 12, 0, 0};
             kw::map_tile(first);
             kw::map_tile_arrived(k, pngs[i].data(), pngs[i].size());
         }

@@ -1,13 +1,14 @@
 // Host run of the whole UI for interaction checks: loads a state document,
 // answers tile requests from a directory laid out like the client's panel
-// cache (<dir>/<skin>/<z>/<x>/<y>.png), and plays a script of touches,
+// cache (<dir>/<skin>/<z>/<x>/<y>.png, turned ones in <dir>/<skin>/r<rot>/...,
+// as kw-fixture writes them), and plays a script of touches,
 // writing frames as PPM.
 //
 // Script lines: "tap X Y", "drag X0 Y0 X1 Y1", "wait MS", "page N",
 // "theme N", "shot FILE", "state FILE", and "markers FILE", "track FILE",
 // "detail FILE" to feed what the client would send; "wheel X Y STEPS",
 // "pinch X Y SCALE" (two fingers spreading to SCALE), "smooth MS",
-// "settings THEME PHY SHOW 0 BL_DAY BL_NIGHT", "redrawn" (prints and
+// "settings THEME PHY SHOW HEADING_UP BL_DAY BL_NIGHT", "redrawn" (prints and
 // resets the pixels flushed since the last one).  Printed: "view SEQ Z
 // LAT LON W H PHY NEW AGE", "detail ID", "prefetch Z/X/Y",
 // "settings ..." when the user changes one, "backlight N".
@@ -73,7 +74,10 @@ void step(uint32_t ms) {
         todo.swap(asked);
         for (const auto &k : todo) {
             char path[512];
-            snprintf(path, sizeof(path), "%s/%s/%u/%u/%u.png", tile_dir.c_str(), kw::skin_name(k.skin),
+            char rot[8] = "";
+            if (k.rot != 0)
+                snprintf(rot, sizeof(rot), "r%u/", static_cast<unsigned>(k.rot));
+            snprintf(path, sizeof(path), "%s/%s/%s%u/%u/%u.png", tile_dir.c_str(), kw::skin_name(k.skin), rot,
                      k.z, static_cast<unsigned>(k.x), static_cast<unsigned>(k.y));
             std::vector<uint8_t> png;
             if (slurp(path, png))
@@ -154,7 +158,7 @@ int main(int argc, char **argv) {
     kw::map_on_detail_request([](uint32_t id) { printf("detail %u\n", static_cast<unsigned>(id)); });
     kw::ui_on_settings_change([](const kw::ui_settings &s) {
         printf("settings %d %u %d %d %u %u %d %d %u %u %u %u\n", static_cast<int>(s.theme), s.phy_mask,
-               static_cast<int>(s.show), 0, s.backlight_day, s.backlight_night, s.imperial, s.auto_by_times, s.day_from,
+               static_cast<int>(s.show), s.heading_up, s.backlight_day, s.backlight_night, s.imperial, s.auto_by_times, s.day_from,
                s.night_from, s.light_theme, s.dark_theme);
     });
     kw::ui_on_backlight([](uint8_t level) { printf("backlight %u\n", level); });
@@ -248,7 +252,7 @@ int main(int argc, char **argv) {
             s.theme = static_cast<kw::theme_mode>(a);
             s.phy_mask = static_cast<uint8_t>(b);
             s.show = static_cast<kw::show_window>(c);
-            (void)d;
+            s.heading_up = d != 0;
             s.backlight_day = static_cast<uint8_t>(e);
             s.backlight_night = static_cast<uint8_t>(g);
             kw::ui_apply_settings(s);

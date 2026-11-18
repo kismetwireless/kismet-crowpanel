@@ -62,8 +62,8 @@ uint32_t tick_cb() {
     return static_cast<uint32_t>(emscripten_get_now());
 }
 
-EM_JS(void, js_request_tile, (int z, int x, int y, int skin, int cached), {
-    Module.kwTile(z, x, y, skin, cached);
+EM_JS(void, js_request_tile, (int z, int x, int y, int skin, int rot, int cached), {
+    Module.kwTile(z, x, y, skin, rot, cached);
 });
 
 EM_JS(void, js_consent, (const char *url, int allow), {
@@ -88,7 +88,7 @@ void request_detail(uint32_t id) {
 }
 
 void request_tile(const kw::tile_key &k, bool prefetch) {
-    js_request_tile(k.z, static_cast<int>(k.x), static_cast<int>(k.y), k.skin, prefetch);
+    js_request_tile(k.z, static_cast<int>(k.x), static_cast<int>(k.y), k.skin, k.rot, prefetch);
 }
 
 void consent(const char *url, bool allow) {
@@ -123,15 +123,15 @@ EMSCRIPTEN_KEEPALIVE void widget_set_theme(int mode) {
     kw::ui_set_theme_mode(static_cast<kw::theme_mode>(mode));
 }
 
-EMSCRIPTEN_KEEPALIVE void widget_tile(int z, int x, int y, int skin, const uint8_t *png, int len) {
+EMSCRIPTEN_KEEPALIVE void widget_tile(int z, int x, int y, int skin, int rot, const uint8_t *png, int len) {
     kw::map_tile_arrived({static_cast<uint32_t>(x), static_cast<uint32_t>(y), static_cast<uint8_t>(z),
-                          static_cast<uint8_t>(skin)},
+                          static_cast<uint8_t>(skin), static_cast<uint8_t>(rot)},
                          png, static_cast<size_t>(len));
 }
 
-EMSCRIPTEN_KEEPALIVE void widget_tile_failed(int z, int x, int y, int skin) {
+EMSCRIPTEN_KEEPALIVE void widget_tile_failed(int z, int x, int y, int skin, int rot) {
     kw::map_tile_failed({static_cast<uint32_t>(x), static_cast<uint32_t>(y), static_cast<uint8_t>(z),
-                         static_cast<uint8_t>(skin)});
+                         static_cast<uint8_t>(skin), static_cast<uint8_t>(rot)});
 }
 
 EMSCRIPTEN_KEEPALIVE int widget_markers(const uint8_t *d, int len) {

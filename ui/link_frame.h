@@ -72,9 +72,10 @@ constexpr bool known_type(uint8_t t) {
 }
 
 // Map tiles.  Request: flags u8 (1 night, 2 cached only, skin << 2), z u8,
-// x u32, y u32, id u16 (LE).  Reply: id u16, status u8, skin u8, z u8, x u32,
-// y u32, then the PNG when ok.  Skin 1 also sets the night bit, for older
-// clients.
+// x u32, y u32, id u16 (LE), then rot u8 for a turned tile (widget_map.h).
+// Reply: id u16, status u8, skin u8, z u8, x u32, y u32, then the PNG when
+// ok.  Skin 1 also sets the night bit, for older clients.  A reply to a
+// turned tile sets bit 7 of skin and has rot u8 before the PNG.
 enum class tile_status : uint8_t {
     ok = 0,
     unavailable = 1,    // no consent, tiles off in Kismet, tile server backing off
@@ -89,6 +90,7 @@ struct tile_request {
     uint32_t x, y;
     uint16_t id;
     bool cached_only = false;
+    uint8_t rot = 0;
 };
 
 struct tile_reply {
@@ -99,9 +101,19 @@ struct tile_reply {
 };
 
 inline constexpr size_t tile_req_len = 12;
+inline constexpr size_t tile_req_turned_len = 13;
 inline constexpr size_t tile_reply_head = 13;
+inline constexpr uint8_t tile_reply_turned = 0x80;
 
-std::array<uint8_t, tile_req_len> encode_tile_request(const tile_request &r);
+// n is tile_req_len, or tile_req_turned_len when rot isn't 0
+struct tile_request_bytes {
+    std::array<uint8_t, tile_req_turned_len> b;
+    size_t n;
+    const uint8_t *data() const { return b.data(); }
+    size_t size() const { return n; }
+};
+
+tile_request_bytes encode_tile_request(const tile_request &r);
 bool decode_tile_request(const uint8_t *d, size_t len, tile_request &out);
 bool decode_tile_reply(const uint8_t *d, size_t len, tile_reply &out);
 

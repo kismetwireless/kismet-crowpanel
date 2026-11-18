@@ -125,6 +125,12 @@ constexpr float lookahead_kmh = 10;
 constexpr float moving_kmh = 2;
 // below lookahead_kmh, follow leaves the map alone until we drift this far
 constexpr double recenter_px = 8;
+// heading-up turns the map only above lookahead_kmh, where the heading is
+// steady, and only once it's this far past half a step
+constexpr double turn_slack_deg = 3;
+constexpr double rot_deg = 360.0 / rot_steps;
+// a turn waits for its tiles, but no longer than this
+constexpr uint32_t turn_wait_ms = 6000;
 
 // Zoom when following at speed: street level in town, wider on the road.
 // Each step has a band either side so cruising near a limit doesn't flip it.
@@ -142,7 +148,7 @@ constexpr uint32_t extrapolate_max_ms = 3000;
 constexpr float pinch_step = 1.6f;
 constexpr std::array<int32_t, 4> prefetch_px = {300, 500, 700, 900};
 constexpr int32_t opts_w = 560;
-constexpr int32_t opts_h = 210;
+constexpr int32_t opts_h = 270;
 constexpr uint8_t backlight_min = 10;
 constexpr std::array<const char *, 5> phy_names = {"Wi-Fi", "BTLE", "BT", "SDR", "Other"};
 constexpr size_t show_chips = static_cast<size_t>(show_window::count);
@@ -535,7 +541,7 @@ struct map_objs {
     lv_obj_t *consent, *consent_body;
     lv_obj_t *sheet, *sheet_name, *sheet_ids, *sheet_sig, *sheet_time;
     lv_obj_t *opts_btn, *opts;
-    lv_obj_t *phy_chip[phy_slots], *show_chip[show_chips];
+    lv_obj_t *phy_chip[phy_slots], *show_chip[show_chips], *turn_chip[2];
 };
 
 struct settings_objs {
@@ -554,6 +560,9 @@ struct map_view {
     bool follow = true, auto_zoom = true;
     bool have_center;
     world_px center;
+    // heading-up: the rotation shown, and the one waiting for its tiles
+    uint8_t rot, rot_next;
+    uint32_t turn_asked;
     uint32_t touched;
     bool ask_again;
     uint32_t consent_sent;
@@ -583,7 +592,8 @@ struct map_view {
     // what the overlay last showed, so unchanged frames aren't redrawn
     bool drawn;
     int64_t drawn_cx, drawn_cy;
-    uint8_t drawn_z;
+    uint8_t drawn_z, drawn_rot;
+    bool drawn_compass;
     uint32_t drawn_markers, drawn_track;
     const void *drawn_pal;
     int32_t me_x, me_y;
@@ -779,6 +789,23 @@ void invalidate_overlay();
 int32_t marker_r(const marker &mk);
 bool draws_as_vehicle(const marker &mk);
 
+// World px to map view coordinates (from the map page's top left) and
+// back, turned when the map is heading-up
+world_px to_view(world_px p) {
+    const world_px d = map_rotate({p.x - mv.center.x, p.y - mv.center.y}, mv.rot);
+    return {d.x + content_w / 2.0, d.y + content_h / 2.0};
+}
+
+world_px from_view(double x, double y) {
+    const world_px d = map_unrotate({x - content_w / 2.0, y - content_h / 2.0}, mv.rot);
+    return {mv.center.x + d.x, mv.center.y + d.y};
+}
+
+lv_point_t on_screen(const lv_area_t &a, world_px p) {
+    const world_px v = to_view(p);
+    return {a.x1 + static_cast<int32_t>(std::lround(v.x)), a.y1 + static_cast<int32_t>(std::lround(v.y))};
+}
+
 void map_zoom(int d) {
     const int z = mv.zoom + d;
     if (z < map_min_zoom || z > map_max_zoom)
@@ -800,12 +827,12 @@ void map_zoom_at(int d, int32_t sx, int32_t sy) {
         map_zoom(d);
         return;
     }
-    const double ox = sx - content_w / 2.0, oy = sy - content_h / 2.0;
+    const world_px o = map_unrotate({sx - content_w / 2.0, sy - content_h / 2.0}, mv.rot);
     const double f = d > 0 ? 2.0 : 0.5;
     mv.auto_zoom = false;
     mv.touched = lv_tick_get();
-    mv.center.x = (mv.center.x + ox) * f - ox;
-    mv.center.y = (mv.center.y + oy) * f - oy;
+    mv.center.x = (mv.center.x + o.x) * f - o.x;
+    mv.center.y = (mv.center.y + o.y) * f - o.y;
     mv.zoom = static_cast<uint8_t>(z);
     map_layout();
 }
@@ -824,8 +851,9 @@ void on_map_drag(lv_event_t *) {
     }
     mv.follow = false;
     mv.touched = lv_tick_get();
-    mv.center.x -= v.x;
-    mv.center.y -= v.y;
+    const world_px d = map_unrotate({static_cast<double>(v.x), static_cast<double>(v.y)}, mv.rot);
+    mv.center.x -= d.x;
+    mv.center.y -= d.y;
     map_layout();
 }
 
@@ -861,8 +889,8 @@ void on_map_tap(lv_event_t *) {
     lv_indev_get_point(lv_indev_active(), &pt);
     lv_area_t a;
     lv_obj_get_coords(ui.map.view, &a);
-    const double tx = pt.x - a.x1 + mv.center.x - content_w / 2.0;
-    const double ty = pt.y - a.y1 + mv.center.y - content_h / 2.0;
+    const world_px t = from_view(pt.x - a.x1, pt.y - a.y1);
+    const double tx = t.x, ty = t.y;
 
     const marker_set &ms = map_markers();
     const marker *best = nullptr;
@@ -932,9 +960,8 @@ void on_pulse(lv_timer_t *) {
     for (size_t i = 0; i < ms.n; i++) {
         if (!(ms.m[i].flags & marker_new))
             continue;
-        const world_px p = marker_px(ms, ms.m[i]);
-        const int32_t x = a.x1 + static_cast<int32_t>(p.x - mv.center.x + content_w / 2.0);
-        const int32_t y = a.y1 + static_cast<int32_t>(p.y - mv.center.y + content_h / 2.0);
+        const lv_point_t sp = on_screen(a, marker_px(ms, ms.m[i]));
+        const int32_t x = sp.x, y = sp.y;
         if (x < a.x1 - 20 || x > a.x2 + 20 || y < a.y1 - 20 || y > a.y2 + 20)
             continue;
         const int32_t r = marker_r(ms.m[i]) + 6;
@@ -1007,10 +1034,12 @@ void draw_track(lv_layer_t *layer, const lv_area_t &a) {
     d.width = 4;
     d.round_start = 1;
     d.round_end = 1;
-    const int32_t ox = a.x1 - static_cast<int32_t>(mv.center.x - content_w / 2.0);
-    const int32_t oy = a.y1 - static_cast<int32_t>(mv.center.y - content_h / 2.0);
+    auto at = [&](size_t i) { return on_screen(a, {static_cast<double>(tc.x[i]), static_cast<double>(tc.y[i])}); };
+    lv_point_t p0 = at(0);
     for (size_t i = 1; i < tc.n; i++) {
-        const int32_t x0 = tc.x[i - 1] + ox, y0 = tc.y[i - 1] + oy, x1 = tc.x[i] + ox, y1 = tc.y[i] + oy;
+        const lv_point_t p1 = at(i);
+        const int32_t x0 = p0.x, y0 = p0.y, x1 = p1.x, y1 = p1.y;
+        p0 = p1;
         if ((x0 < a.x1 && x1 < a.x1) || (x0 > a.x2 && x1 > a.x2) || (y0 < a.y1 && y1 < a.y1) ||
             (y0 > a.y2 && y1 > a.y2))
             continue;
@@ -1030,7 +1059,7 @@ void draw_vehicle(lv_layer_t *layer, const marker &mk, int32_t x, int32_t y, lv_
     const lv_area_t box = {x - w / 2, y - h / 2, x - w / 2 + w - 1, y - h / 2 + h - 1};
     lv_draw_image_dsc_t d;
     lv_draw_image_dsc_init(&d);
-    d.rotation = static_cast<int32_t>(mk.heading) * 3600 / 256;
+    d.rotation = (static_cast<int32_t>(mk.heading) * 3600 / 256 + 3600 - mv.rot * 3600 / rot_steps) % 3600;
     d.pivot = {w / 2, h / 2};
     d.recolor_opa = LV_OPA_COVER;
     d.opa = opa;
@@ -1065,9 +1094,8 @@ void draw_markers(lv_layer_t *layer, const lv_area_t &a) {
 
     for (size_t i = 0; i < ms.n; i++) {
         const marker &mk = ms.m[i];
-        const world_px p = marker_px(ms, mk);
-        const int32_t x = a.x1 + static_cast<int32_t>(std::lround(p.x - mv.center.x + content_w / 2.0));
-        const int32_t y = a.y1 + static_cast<int32_t>(std::lround(p.y - mv.center.y + content_h / 2.0));
+        const lv_point_t sp = on_screen(a, marker_px(ms, mk));
+        const int32_t x = sp.x, y = sp.y;
         if (x < a.x1 - 20 || x > a.x2 + 20 || y < a.y1 - 20 || y > a.y2 + 20)
             continue;
         const bool cluster = mk.flags & marker_cluster;
@@ -1129,6 +1157,31 @@ void draw_markers(lv_layer_t *layer, const lv_area_t &a) {
     }
 }
 
+// Heading-up: a needle pointing north, above the scale bar
+void draw_compass(lv_layer_t *layer, const lv_area_t &a) {
+    constexpr int32_t r = 18;
+    const int32_t x = a.x1 + 12 + r, y = a.y2 - 52 - r;
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.radius = LV_RADIUS_CIRCLE;
+    d.bg_color = c(pal->panel);
+    d.bg_opa = LV_OPA_80;
+    d.border_color = c(pal->panel_hi);
+    d.border_width = 1;
+    const lv_area_t disc = {x - r, y - r, x + r, y + r};
+    lv_draw_rect(layer, &d, &disc);
+
+    const world_px n = map_rotate({0, -1}, mv.rot);
+    auto pt = [&](double along, double across) {
+        return lv_point_t{x + static_cast<int32_t>(std::lround(n.x * along - n.y * across)),
+                          y + static_cast<int32_t>(std::lround(n.y * along + n.x * across))};
+    };
+    const lv_point_t north[3] = {pt(14, 0), pt(0, -6), pt(0, 6)};
+    const lv_point_t south[3] = {pt(-14, 0), pt(0, 6), pt(0, -6)};
+    draw_triangle(layer, north, c(pal->err));
+    draw_triangle(layer, south, c(pal->muted));
+}
+
 // Track, devices, then our position: an arrow along the heading when
 // moving, else a dot
 void on_map_draw(lv_event_t *e) {
@@ -1139,11 +1192,12 @@ void on_map_draw(lv_event_t *e) {
     lv_obj_get_coords(ui.map.overlay, &a);
     draw_track(layer, a);
     draw_markers(layer, a);
+    if (settings.heading_up)
+        draw_compass(layer, a);
     if (!mv.have_pos)
         return;
-    const world_px me = map_project(mv.lat, mv.lon, mv.zoom);
-    const int32_t x = a.x1 + static_cast<int32_t>(std::lround(me.x - mv.center.x + content_w / 2.0));
-    const int32_t y = a.y1 + static_cast<int32_t>(std::lround(me.y - mv.center.y + content_h / 2.0));
+    const lv_point_t sp = on_screen(a, map_project(mv.lat, mv.lon, mv.zoom));
+    const int32_t x = sp.x, y = sp.y;
     if (x < a.x1 - 20 || x > a.x2 + 20 || y < a.y1 - 20 || y > a.y2 + 20)
         return;
 
@@ -1152,7 +1206,7 @@ void on_map_draw(lv_event_t *e) {
     const lv_color_t edge = edge_color();
 
     if (mv.fix && mv.speed > moving_kmh) {
-        const double h = mv.heading * pi / 180.0, sn = std::sin(h), cs = std::cos(h);
+        const double h = (mv.heading - mv.rot * rot_deg) * pi / 180.0, sn = std::sin(h), cs = std::cos(h);
         auto shape = [&](double scale, lv_point_t *out) {
             static constexpr double xs[] = {0, -11, 11}, ys[] = {-17, 12, 12};
             for (size_t i = 0; i < 3; i++) {
@@ -1185,6 +1239,8 @@ void sync_options() {
         lv_obj_set_state(m.phy_chip[i], LV_STATE_CHECKED, settings.phy_mask & (1u << i));
     for (size_t i = 0; i < show_chips; i++)
         lv_obj_set_state(m.show_chip[i], LV_STATE_CHECKED, static_cast<size_t>(settings.show) == i);
+    for (size_t i = 0; i < 2; i++)
+        lv_obj_set_state(m.turn_chip[i], LV_STATE_CHECKED, settings.heading_up == (i == 1));
     // the options button shows when a filter hides something
     const bool filtered = settings.phy_mask != phy_all || settings.show != show_window::all;
     lv_obj_set_state(m.opts_btn, LV_STATE_CHECKED, filtered);
@@ -1206,6 +1262,14 @@ void on_filter(lv_event_t *e) {
     sync_options();
     settings_changed();
     request_view(true);
+}
+
+void on_turn(lv_event_t *e) {
+    settings.heading_up = lv_event_get_user_data(e) != nullptr;
+    mv.opts_touched = lv_tick_get();
+    sync_options();
+    settings_changed();
+    map_layout();
 }
 
 void on_backlight(lv_event_t *e) {
@@ -1275,6 +1339,11 @@ void build_options(lv_obj_t *p) {
     constexpr int32_t sw = (iw - 3 * 8) / static_cast<int32_t>(show_chips);
     for (size_t i = 0; i < show_chips; i++)
         m.show_chip[i] = make_chip(m.opts, static_cast<int32_t>(i) * (sw + 8), 132, sw, show_names[i]);
+
+    static constexpr const char *turns[] = {LV_SYMBOL_UP "  North up", LV_SYMBOL_GPS "  Travel up"};
+    constexpr int32_t tw = (iw - 8) / 2;
+    for (size_t i = 0; i < 2; i++)
+        m.turn_chip[i] = make_chip(m.opts, static_cast<int32_t>(i) * (tw + 8), 190, tw, turns[i], on_turn, i);
 
     lv_obj_add_flag(m.opts, LV_OBJ_FLAG_HIDDEN);
 }
@@ -1799,9 +1868,9 @@ void invalidate_overlay() {
     int32_t mx = 0, my = 0, head = 0;
     uint8_t kind = 0;
     if (mv.have_pos) {
-        const world_px me = map_project(mv.lat, mv.lon, mv.zoom);
-        mx = static_cast<int32_t>(std::lround(me.x - mv.center.x + content_w / 2.0));
-        my = static_cast<int32_t>(std::lround(me.y - mv.center.y + content_h / 2.0));
+        const world_px me = to_view(map_project(mv.lat, mv.lon, mv.zoom));
+        mx = static_cast<int32_t>(std::lround(me.x));
+        my = static_cast<int32_t>(std::lround(me.y));
         const bool arrow = mv.fix && mv.speed > moving_kmh;
         kind = arrow ? 3 : mv.fix ? 1 : 2;
         head = arrow ? static_cast<int32_t>(std::lround(mv.heading)) : 0;
@@ -1818,9 +1887,9 @@ void invalidate_overlay() {
         lv_obj_invalidate_area(ov, &box);
     };
     auto marker_xy = [&](const marker_set &set, const marker &mk, int32_t &x, int32_t &y) {
-        const world_px p = marker_px(set, mk);
-        x = static_cast<int32_t>(std::lround(p.x - mv.center.x + content_w / 2.0));
-        y = static_cast<int32_t>(std::lround(p.y - mv.center.y + content_h / 2.0));
+        const world_px p = to_view(marker_px(set, mk));
+        x = static_cast<int32_t>(std::lround(p.x));
+        y = static_cast<int32_t>(std::lround(p.y));
     };
     auto same = [](const marker &p, const marker &q) {
         return p.x == q.x && p.y == q.y && p.id == q.id && p.phy == q.phy && p.flags == q.flags &&
@@ -1830,6 +1899,7 @@ void invalidate_overlay() {
     auto reach = [](const marker &mk) { return marker_r(mk) + 22; };
 
     const bool view_changed = !mv.drawn || cx != mv.drawn_cx || cy != mv.drawn_cy || mv.zoom != mv.drawn_z ||
+                              mv.rot != mv.drawn_rot || settings.heading_up != mv.drawn_compass ||
                               track_ver != mv.drawn_track || pal != mv.drawn_pal;
     bool full = view_changed || (mgen != mv.drawn_markers && ms.z != drawn_ms.z);
     if (!full && mgen != mv.drawn_markers) {
@@ -1866,6 +1936,8 @@ void invalidate_overlay() {
     mv.drawn_cx = cx;
     mv.drawn_cy = cy;
     mv.drawn_z = mv.zoom;
+    mv.drawn_rot = mv.rot;
+    mv.drawn_compass = settings.heading_up;
     mv.drawn_markers = mgen;
     mv.drawn_track = track_ver;
     mv.drawn_pal = pal;
@@ -1875,9 +1947,94 @@ void invalidate_overlay() {
     mv.me_kind = kind;
 }
 
+// The tile at grid position (tx, ty) of the view turned by rot, or false
+// off the world
+bool tile_at(int64_t tx, int64_t ty, uint8_t rot, tile_key &k) {
+    const int64_t n = int64_t{1} << mv.zoom;
+    if (rot == 0) {
+        if (ty < 0 || ty >= n)
+            return false;
+        k = {static_cast<uint32_t>(((tx % n) + n) % n), static_cast<uint32_t>(ty), mv.zoom, pal->skin, 0};
+        return true;
+    }
+    const int64_t off = rot_offset(mv.zoom);
+    if (tx + off < 0 || ty + off < 0 || tx + off >= 2 * off || ty + off >= 2 * off)
+        return false;
+    k = {static_cast<uint32_t>(tx + off), static_cast<uint32_t>(ty + off), mv.zoom, pal->skin, rot};
+    return true;
+}
+
+// The tile under world px p in the view turned by rot
+bool tile_under(world_px p, uint8_t rot, tile_key &k) {
+    const world_px r = map_rotate(p, rot);
+    return tile_at(static_cast<int64_t>(std::floor(r.x / tile_px)), static_cast<int64_t>(std::floor(r.y / tile_px)),
+                   rot, k);
+}
+
+struct slot_tile {
+    tile_key key;
+    int32_t sx, sy;
+    bool on;
+};
+
+// What each tile slot shows at rotation rot: where, and which tile
+void view_tiles(uint8_t rot, slot_tile (&out)[map_slots]) {
+    const world_px rc = map_rotate(mv.center, rot);
+    const double left = rc.x - content_w / 2.0;
+    const double top = rc.y - content_h / 2.0;
+    const int64_t tx0 = static_cast<int64_t>(std::floor(left / tile_px));
+    const int64_t ty0 = static_cast<int64_t>(std::floor(top / tile_px));
+    for (int32_t r = 0; r < map_rows; r++) {
+        for (int32_t col = 0; col < map_cols; col++) {
+            slot_tile &t = out[r * map_cols + col];
+            const int64_t tx = tx0 + col, ty = ty0 + r;
+            t.sx = static_cast<int32_t>(std::lround(tx * tile_px - left));
+            t.sy = static_cast<int32_t>(std::lround(ty * tile_px - top));
+            t.on = t.sx < content_w && t.sy < content_h && t.sx + tile_px > 0 && t.sy + tile_px > 0 &&
+                   tile_at(tx, ty, rot, t.key);
+        }
+    }
+}
+
+// Missing tiles of a view, nearest the middle first
+size_t missing_tiles(const slot_tile (&v)[map_slots], tile_key *out) {
+    int64_t dist[map_slots];
+    size_t n = 0;
+    for (const slot_tile &t : v) {
+        if (!t.on || map_tile(t.key) != nullptr)
+            continue;
+        const int64_t dx = t.sx + tile_px / 2 - content_w / 2, dy = t.sy + tile_px / 2 - content_h / 2;
+        size_t j = n++;
+        for (; j > 0 && dist[j - 1] > dx * dx + dy * dy; j--) {
+            out[j] = out[j - 1];
+            dist[j] = dist[j - 1];
+        }
+        out[j] = t.key;
+        dist[j] = dx * dx + dy * dy;
+    }
+    return n;
+}
+
+// Heading-up: the step nearest our heading, once the heading is past the
+// current step by half a step and some slack; stopped, crawling or
+// panning, the map stays as it is
+void pick_turn() {
+    if (!settings.heading_up) {
+        mv.rot_next = 0;
+        return;
+    }
+    if (!mv.follow || !mv.fix || mv.speed <= lookahead_kmh)
+        return;
+    if (std::fabs(std::remainder(mv.heading - mv.rot_next * rot_deg, 360.0)) <= rot_deg / 2 + turn_slack_deg)
+        return;
+    const long step = std::lround(mv.heading / rot_deg) % rot_steps;
+    mv.rot_next = static_cast<uint8_t>(step < 0 ? step + rot_steps : step);
+}
+
 void map_layout() {
     auto &m = ui.map;
-    const uint8_t skin = pal->skin;
+
+    pick_turn();
 
     if (mv.follow && mv.have_pos) {
         if (mv.auto_zoom)
@@ -1901,6 +2058,7 @@ void map_layout() {
     lv_obj_set_state(m.follow_icon, LV_STATE_CHECKED, mv.follow);
 
     if (!mv.have_center) {
+        mv.rot = mv.rot_next;
         for (size_t i = 0; i < map_slots; i++) {
             set_visible(m.tiles[i], false);
             m.has[i] = false;
@@ -1911,53 +2069,45 @@ void map_layout() {
         return;
     }
 
-    const double left = mv.center.x - content_w / 2.0;
-    const double top = mv.center.y - content_h / 2.0;
-    const int64_t tx0 = static_cast<int64_t>(std::floor(left / tile_px));
-    const int64_t ty0 = static_cast<int64_t>(std::floor(top / tile_px));
-    const int64_t n = int64_t{1} << mv.zoom;
-
-    tile_key want[map_slots];
-    int64_t dist[map_slots];
+    const bool tiles_on = have_last && last.map.available;
+    static slot_tile view[map_slots];
+    tile_key want[2 * map_slots];
     size_t nw = 0;
 
-    for (int32_t r = 0; r < map_rows; r++) {
-        for (int32_t col = 0; col < map_cols; col++) {
-            const size_t i = static_cast<size_t>(r * map_cols + col);
-            const int64_t tx = tx0 + col, ty = ty0 + r;
-            const int32_t sx = static_cast<int32_t>(std::lround(tx * tile_px - left));
-            const int32_t sy = static_cast<int32_t>(std::lround(ty * tile_px - top));
-            if (sx >= content_w || sy >= content_h || sx + tile_px <= 0 || sy + tile_px <= 0 || ty < 0 || ty >= n) {
-                set_visible(m.tiles[i], false);
-                m.has[i] = false;
-                continue;
-            }
-            const tile_key key{static_cast<uint32_t>(((tx % n) + n) % n), static_cast<uint32_t>(ty), mv.zoom, skin};
-            lv_obj_set_pos(m.tiles[i], sx, sy);
-            const lv_draw_buf_t *buf = map_tile(key);
-            if (buf == nullptr) {
-                set_visible(m.tiles[i], false);
-                m.has[i] = false;
-                const int64_t dx = sx + tile_px / 2 - content_w / 2, dy = sy + tile_px / 2 - content_h / 2;
-                size_t j = nw++;
-                for (; j > 0 && dist[j - 1] > dx * dx + dy * dy; j--) {
-                    want[j] = want[j - 1];
-                    dist[j] = dist[j - 1];
-                }
-                want[j] = key;
-                dist[j] = dx * dx + dy * dy;
-                continue;
-            }
-            if (!m.has[i] || !(m.shown[i] == key)) {
-                lv_image_set_src(m.tiles[i], buf);
-                m.shown[i] = key;
-                m.has[i] = true;
-            }
-            set_visible(m.tiles[i], true);
+    // a turn keeps the old view up until the new one's tiles are in
+    if (mv.rot_next != mv.rot) {
+        if (mv.turn_asked == 0)
+            mv.turn_asked = lv_tick_get() | 1;
+        view_tiles(mv.rot_next, view);
+        nw = missing_tiles(view, want);
+        if (nw == 0 || !tiles_on || lv_tick_elaps(mv.turn_asked) > turn_wait_ms) {
+            mv.rot = mv.rot_next;
+            nw = 0;
         }
     }
+    if (mv.rot == mv.rot_next)
+        mv.turn_asked = 0;
 
-    if (cur_page == page::map && have_last && last.map.available) {
+    view_tiles(mv.rot, view);
+    nw += missing_tiles(view, want + nw);
+    for (size_t i = 0; i < map_slots; i++) {
+        const slot_tile &t = view[i];
+        const lv_draw_buf_t *buf = t.on ? map_tile(t.key) : nullptr;
+        if (buf == nullptr) {
+            set_visible(m.tiles[i], false);
+            m.has[i] = false;
+            continue;
+        }
+        lv_obj_set_pos(m.tiles[i], t.sx, t.sy);
+        if (!m.has[i] || !(m.shown[i] == t.key)) {
+            lv_image_set_src(m.tiles[i], buf);
+            m.shown[i] = t.key;
+            m.has[i] = true;
+        }
+        set_visible(m.tiles[i], true);
+    }
+
+    if (cur_page == page::map && tiles_on) {
         map_want(want, nw, lv_tick_get());
         // the view is complete: tiles on the road ahead, from the client's cache
         if (nw == 0 && mv.follow && mv.fix && mv.speed > lookahead_kmh) {
@@ -1966,12 +2116,9 @@ void map_layout() {
             tile_key ahead[prefetch_px.size()];
             size_t na = 0;
             for (int32_t d : prefetch_px) {
-                const double x = me.x + std::sin(h) * d, y = me.y - std::cos(h) * d;
-                if (x < 0 || y < 0 || y >= static_cast<double>(n) * tile_px)
-                    continue;
-                const tile_key k{static_cast<uint32_t>(static_cast<int64_t>(x / tile_px) % n),
-                                 static_cast<uint32_t>(y / tile_px), mv.zoom, skin};
-                if (na == 0 || !(ahead[na - 1] == k))
+                tile_key k;
+                if (tile_under({me.x + std::sin(h) * d, me.y - std::cos(h) * d}, mv.rot, k) &&
+                    (na == 0 || !(ahead[na - 1] == k)))
                     ahead[na++] = k;
             }
             map_prefetch(ahead, na, lv_tick_get());
@@ -2512,7 +2659,8 @@ void ui_settings_pack(const ui_settings &s, uint8_t (&b)[ui_settings_bytes]) {
     b[9] = static_cast<uint8_t>(s.night_from >> 8);
     b[10] = s.light_theme;
     b[11] = s.dark_theme;
-    b[12] = b[13] = 0;
+    b[12] = static_cast<uint8_t>(s.heading_up);
+    b[13] = 0;
 }
 
 bool ui_settings_unpack(const uint8_t *b, size_t len, ui_settings &s) {
@@ -2532,6 +2680,7 @@ bool ui_settings_unpack(const uint8_t *b, size_t len, ui_settings &s) {
     s.night_from = static_cast<uint16_t>((b[8] | b[9] << 8) % (24 * 60));
     s.light_theme = b[10] % light_theme_n;
     s.dark_theme = b[11] % dark_theme_n;
+    s.heading_up = b[12] & 1;
     return true;
 }
 

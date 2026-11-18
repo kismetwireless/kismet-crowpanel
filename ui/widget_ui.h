@@ -49,6 +49,7 @@ struct ui_settings {
     bool imperial = false;
     uint8_t phy_mask = phy_all;     // map filter, a bit per phy
     show_window show = show_window::all;  // map: which devices by age
+    bool heading_up = false;        // map turns so travel is up
     uint8_t backlight_day = 200;
     uint8_t backlight_night = 60;
 };

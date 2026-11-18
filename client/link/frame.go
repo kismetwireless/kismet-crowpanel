@@ -101,9 +101,10 @@ func (d *Decoder) Feed(data []byte) (frames []Frame, text []byte) {
 }
 
 // Map tiles.  Request: flags u8 (1 night, 2 cached only, skin << 2), z u8,
-// x u32, y u32, id u16.  Reply: id u16, status u8, skin u8, z u8, x u32,
-// y u32, PNG.  Skins 0 and 1 are day and night, so the night bit alone, from
-// an older panel, means skin 1.
+// x u32, y u32, id u16, then rot u8 for a turned tile.  Reply: id u16,
+// status u8, skin u8, z u8, x u32, y u32, PNG; a reply to a turned tile sets
+// bit 7 of skin and has rot u8 before the PNG.  Skins 0 and 1 are day and
+// night, so the night bit alone, from an older panel, means skin 1.
 type TileStatus uint8
 
 const (
@@ -113,16 +114,19 @@ const (
 	TileFailed
 )
 
+const replyTurned = 0x80
+
 type TileRequest struct {
 	Skin       uint8
 	CachedOnly bool
 	Z          uint8
 	X, Y       uint32
 	ID         uint16
+	Rot        uint8
 }
 
 func DecodeTileRequest(p []byte) (TileRequest, bool) {
-	if len(p) != 12 {
+	if len(p) != 12 && len(p) != 13 {
 		return TileRequest{}, false
 	}
 	le := binary.LittleEndian
@@ -130,13 +134,24 @@ func DecodeTileRequest(p []byte) (TileRequest, bool) {
 	if skin == 0 && p[0]&1 != 0 {
 		skin = 1
 	}
-	return TileRequest{skin, p[0]&2 != 0, p[1], le.Uint32(p[2:]), le.Uint32(p[6:]), le.Uint16(p[10:])}, true
+	r := TileRequest{skin, p[0]&2 != 0, p[1], le.Uint32(p[2:]), le.Uint32(p[6:]), le.Uint16(p[10:]), 0}
+	if len(p) == 13 {
+		r.Rot = p[12]
+	}
+	return r, true
 }
 
 func TileReply(r TileRequest, s TileStatus, png []byte) []byte {
-	b := binary.LittleEndian.AppendUint16(make([]byte, 0, 13+len(png)), r.ID)
-	b = append(b, byte(s), r.Skin, r.Z)
+	skin := r.Skin
+	if r.Rot != 0 {
+		skin |= replyTurned
+	}
+	b := binary.LittleEndian.AppendUint16(make([]byte, 0, 14+len(png)), r.ID)
+	b = append(b, byte(s), skin, r.Z)
 	b = binary.LittleEndian.AppendUint32(b, r.X)
 	b = binary.LittleEndian.AppendUint32(b, r.Y)
+	if r.Rot != 0 {
+		b = append(b, r.Rot)
+	}
 	return append(b, png...)
 }

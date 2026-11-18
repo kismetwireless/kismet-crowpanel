@@ -343,3 +343,65 @@ func TestVariantQuantizes(t *testing.T) {
 		}
 	}
 }
+
+// Half and quarter turns land on whole pixels, so the turned tile is the
+// tile under it turned exactly
+func TestTurned(t *testing.T) {
+	m := newMock()
+	defer m.srv.Close()
+	s := service(t, t.TempDir(), &clock{t: 1000}, m.url(""))
+	s.SetConsent(m.url(""), true)
+	const z = 3
+	off := 2 << z
+	plain, err := s.Get("classic", z, 2, 5, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fromImage(mustDecode(t, plain))
+	// 180°: turned square (x, y) is world square (-x-1, -y-1)
+	// 90°: turned (x, y) is world (-y-1, x)
+	for _, c := range []struct {
+		rot, x, y int
+		src       func(i, j int) (int, int)
+	}{
+		{18, -2 - 1 + off, -5 - 1 + off, func(i, j int) (int, int) { return 255 - i, 255 - j }},
+		{9, 5 + off, -2 - 1 + off, func(i, j int) (int, int) { return 255 - j, i }},
+	} {
+		b, err := s.GetTurned("classic", z, c.x, c.y, c.rot, false)
+		if err != nil {
+			t.Fatalf("rot %d: %v", c.rot, err)
+		}
+		got := fromImage(mustDecode(t, b))
+		bad := 0
+		for j := 0; j < 256; j++ {
+			for i := 0; i < 256; i++ {
+				si, sj := c.src(i, j)
+				if got.pal[got.idx[j*256+i]] != want.pal[want.idx[sj*256+si]] {
+					bad++
+				}
+			}
+		}
+		if bad > 0 {
+			t.Errorf("rot %d: %d pixels differ from the tile turned", c.rot, bad)
+		}
+		again, err := s.GetTurned("classic", z, c.x, c.y, c.rot, true)
+		if err != nil || !bytes.Equal(again, b) {
+			t.Errorf("rot %d from the cache: %v", c.rot, err)
+		}
+	}
+	if _, err := s.GetTurned("classic", z, 6+off, off, 9, true); status(err) != 404 {
+		t.Errorf("prefetch of uncached tiles: %v", err)
+	}
+	if _, err := s.GetTurned("classic", z, 0, 0, RotSteps, false); status(err) != 400 {
+		t.Errorf("bad rot: %v", err)
+	}
+}
+
+func mustDecode(t *testing.T, b []byte) image.Image {
+	t.Helper()
+	img, err := png.Decode(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}

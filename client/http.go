@@ -133,7 +133,14 @@ func handler(st *state, webDir string) http.Handler {
 			z, _ := strconv.Atoi(m[2])
 			x, _ := strconv.Atoi(m[3])
 			y, _ := strconv.Atoi(m[4])
-			png, err := st.tiles.Get(m[1], z, x, y, r.URL.Query().Get("cached") == "1")
+			cached := r.URL.Query().Get("cached") == "1"
+			var png []byte
+			var err error
+			if rot, _ := strconv.Atoi(r.URL.Query().Get("rot")); rot != 0 {
+				png, err = st.tiles.GetTurned(m[1], z, x, y, rot, cached)
+			} else {
+				png, err = st.tiles.Get(m[1], z, x, y, cached)
+			}
 			if err != nil {
 				tileErr(w, err)
 				return

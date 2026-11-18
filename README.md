@@ -148,11 +148,12 @@ it off.
 
 - `GET /api/v1/map.json`: tile server, mode, consent state
 - `POST /api/v1/map/consent` `{"url": ..., "allow": true}`
-- `GET /api/v1/tiles/<skin>/<z>/<x>/<y>.png[?cached=1]`, skin one of
-  classic, amber, ocean, sunlight, red, cyberpunk (`cached=1`: from the
-  cache only, 404 if not there)
+- `GET /api/v1/tiles/<skin>/<z>/<x>/<y>.png[?cached=1][&rot=N]`, skin one
+  of classic, amber, ocean, sunlight, red, cyberpunk (`cached=1`: from the
+  cache only, 404 if not there; `rot`: a turned tile for a travel-up map,
+  see `client/tiles/turn.go`)
 
-The Map page follows the GPS fix north-up, zooms by speed (17 in town, 16
+The Map page follows the GPS fix, north-up or travel-up, zooms by speed (17 in town, 16
 above 30 km/h, 15 above 70), and looks ahead along the heading when moving.
 Between fixes it moves along your heading and speed, so following is
 smooth.  Drag to pan, pinch (or mouse wheel in the viewer) to zoom;
@@ -168,9 +169,14 @@ position they report (ADS-B, AIS), turned to their heading.
 Close devices cluster into numbered bubbles; tap one to zoom in, or tap a
 device for its details.  The grey line is your own track.
 
-The gear button on the map opens map options: which phys to show, and
+The gear button on the map opens map options: which phys to show,
 whether to show all devices, the last hour, the last 10 minutes or only new
-ones (first seen in the last minute).  The button is
+ones (first seen in the last minute), and North up or Travel up.  Travel up
+turns the map in 10° steps so your heading points up, once you're above
+10 km/h; stopped or panning, it stays as it was, and a compass at the
+bottom left points north.  The panel can't turn the map quickly itself, so
+the client draws each tile already turned and caches it; the map keeps its
+old turn until the new tiles are in.  The button is
 outlined while a filter hides anything.  When the
 view is loaded and you're moving, the panel also asks for tiles on the road
 ahead, from the client's cache only: prefetching never goes to the tile

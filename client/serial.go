@@ -258,7 +258,11 @@ func (s *session) tileWorker() {
 				skin = tiles.Skins[r.Skin]
 			}
 			var err error
-			png, err = s.st.tiles.Get(skin, int(r.Z), int(r.X), int(r.Y), r.CachedOnly)
+			if r.Rot != 0 {
+				png, err = s.st.tiles.GetTurned(skin, int(r.Z), int(r.X), int(r.Y), int(r.Rot), r.CachedOnly)
+			} else {
+				png, err = s.st.tiles.Get(skin, int(r.Z), int(r.X), int(r.Y), r.CachedOnly)
+			}
 			var te *tiles.Error
 			switch {
 			case err == nil:
